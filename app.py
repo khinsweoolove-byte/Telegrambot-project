@@ -122,9 +122,7 @@ async def check_all_channels(user_id, bot):
     return True, None
 
 # ---------- Conversation states ----------
-# For /post
 POST_PHOTO, POST_MOVIE = range(2)
-# For /post_text
 POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
 
 # ---------- /post conversation ----------
@@ -140,7 +138,7 @@ async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_PHOTO
     context.user_data['poster'] = update.message.photo[-1].file_id
-    await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video သို့မဟုတ် document) ကို ပို့ပေးပါ။")
+    await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
     return POST_MOVIE
 
 async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -267,13 +265,11 @@ async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- Standalone file upload -> Instant deep link (only when not in conversation) ----------
+# ---------- Standalone file upload -> Instant deep link ----------
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
         return
-
-    # If user is in a conversation (context.user_data not empty), ignore
     if context.user_data:
         return
 
@@ -307,11 +303,10 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"ဤလင့်ခ်ကို နှိပ်သူတိုင်း (လိုအပ်သော Channel များဝင်ပြီးပါက) ဖိုင်ကို ရယူနိုင်ပါသည်။"
     )
 
-# ---------- /start for admin panel and user deep link handler ----------
+# ---------- /start (Admin Panel + User) ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    # Admin: show panel (no deep link payload)
     if is_admin(user_id):
         if context.args:
             payload = context.args[0]
@@ -360,10 +355,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
         else:
+            # Admin Panel with emojis as requested
             await update.message.reply_text(
-                "🎬 **အဒ်မင် ထိန်းချုပ်မှု ဘောင်သို့ ကြိုဆိုပါသည်။**\n\n"
+                "🎬 **ADMIN ထိန်းချုပ်မှု PANEL မှ ကြိုဆိုပါသည်။**\n\n"
                 "📤 မည်သည့်ဖိုင်ကိုမဆို ပို့ပေးလိုက်ပါက Deep Link ကို ချက်ချင်းရရှိမည်။\n\n"
                 "🛠️ **Command များ**\n"
+                "🤖 `/start` - Bot ကိုစတင်ရန်။\n"
                 "🎬 `/post` - ပုံနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
                 "📝 `/post_text` - ပုံ၊ စာသားနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
                 "📊 `/stats` - စာရင်းအင်းများ ကြည့်ရန်။\n"
@@ -453,7 +450,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
-        await update.message.reply_text("📢 /broadcast <message>")
+        await update.message.reply_text("📢 `/broadcast <message>` - အသုံးပြုသူအားလုံးသို့ စာပို့ရန်။")
         return
     msg = ' '.join(context.args)
     users = get_all_users()
@@ -467,9 +464,8 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"📢 ပြန်လွှင့်ခြင်း ပြီးဆုံးပါပြီ။ လက်ခံသူ {count} ဦး။")
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel any active conversation for the user"""
     if not context.user_data:
-        await update.message.reply_text("လက်ရှိ လုပ်ဆောင်နေသော လုပ်ငန်းစဉ် မရှိပါ။")
+        await update.message.reply_text("❌ လက်ရှိ လုပ်ဆောင်နေသော လုပ်ငန်းစဉ် မရှိပါ။")
         return
     context.user_data.clear()
     await update.message.reply_text("✅ လက်ရှိလုပ်ဆောင်နေသော လုပ်ငန်းစဉ်ကို ဖျက်သိမ်းလိုက်ပါသည်။")
@@ -478,7 +474,7 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
-        await update.message.reply_text("🗑️ အသုံးပြုပုံ: /delete <payload>")
+        await update.message.reply_text("🗑️ `/delete <payload>` - သိမ်းဆည်းထားသော ဖိုင်တစ်ခုကို ဖျက်ရန်။")
         return
     payload = context.args[0]
     if delete_file_by_payload(payload):
@@ -494,7 +490,7 @@ if not WEBHOOK_URL:
 
 telegram_app = Application.builder().token(TOKEN).build()
 
-# Order matters: conversation handlers first, then command handlers, then message handler
+# Conversation handlers
 telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post', post_start)],
     states={POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
