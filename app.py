@@ -23,10 +23,6 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "Bot is running", 200
-
 # ---------- MongoDB ----------
 MONGO_URI = os.environ.get("MONGO_URI")
 if not MONGO_URI:
@@ -38,10 +34,11 @@ try:
     mongo_client.admin.command('ping')
     logger.info("MongoDB connected successfully")
 except Exception as e:
-    logger.warning(f"MongoDB connection failed: {e}")
+    logger.warning(f"MongoDB connection failed with normal client: {e}")
+    logger.info("Attempting with tlsAllowInvalidCertificates=True...")
     mongo_client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True, serverSelectionTimeoutMS=5000)
     mongo_client.admin.command('ping')
-    logger.info("MongoDB connected (SSL bypassed)")
+    logger.info("MongoDB connected successfully (SSL validation bypassed)")
 
 db = mongo_client["movie_bot_v3"]
 file_store_collection = db["file_store"]
@@ -165,7 +162,7 @@ async def create_telegraph_page(title, content):
     except:
         return None
 
-# ---------- Translation ----------
+# ---------- Translation & Narration ----------
 translator_en_to_my = GoogleTranslator(source='en', target='my')
 translator_my_to_en = GoogleTranslator(source='my', target='en')
 
@@ -195,9 +192,10 @@ def make_narrative_plot(plot_en):
     if not plot_en or plot_en == 'N/A':
         return "ဇာတ်လမ်းအကျဉ်း မရရှိနိုင်ပါ။"
     plot_my = translate_text(plot_en, source='en', target='my')
-    return f"🎙️ **ဇာတ်လမ်းအကျဉ်းချုပ်** (သဘာဝကျကျ ပြောပြထားသည်)\n\n{plot_my}"
+    narrative = f"🎙️ **ဇာတ်လမ်းအကျဉ်းချုပ်** (သဘာဝကျကျ ပြောပြထားသည်)\n\n{plot_my}\n\n(အထက်ပါအတိုင်း ဇာတ်ကားအကြောင်း ဖတ်ရှုနိုင်ပါသည်။)"
+    return narrative
 
-# ---------- OMDB ----------
+# ---------- OMDB Movie Info ----------
 OMDB_API_KEY = "5025f95c"
 
 def get_movie_info(movie_input):
@@ -215,7 +213,22 @@ def get_movie_info(movie_input):
         resp = requests.get("http://www.omdbapi.com/", params=params, timeout=10).json()
         if resp.get('Response') == 'False':
             return None
-        plot_narrative = make_narrative_plot(resp.get('Plot', 'N/A'))
+        title_en = resp.get('Title', 'N/A')
+        title_my = translate_text(title_en, source='en', target='my')
+        genre_en = resp.get('Genre', 'N/A')
+        genre_my = translate_text(genre_en)
+        actors_en = resp.get('Actors', 'N/A')
+        actors_my = translate_text(actors_en)
+        director_en = resp.get('Director', 'N/A')
+        director_my = translate_text(director_en)
+        country_en = resp.get('Country', 'N/A')
+        country_my = translate_text(country_en)
+        language_en = resp.get('Language', 'N/A')
+        language_my = translate_text(language_en)
+        imdb_rating = resp.get('imdbRating', 'N/A')
+        imdb_votes = resp.get('imdbVotes', 'N/A')
+        plot_en = resp.get('Plot', 'N/A')
+        plot_narrative = make_narrative_plot(plot_en)
         runtime_raw = resp.get('Runtime', 'N/A')
         runtime = runtime_raw
         if 'min' in runtime_raw:
@@ -227,16 +240,17 @@ def get_movie_info(movie_input):
             except:
                 pass
         return {
-            'title': translate_text(resp.get('Title', 'N/A')),
+            'title': title_my,
+            'title_en': title_en,
             'year': resp.get('Year', 'N/A'),
-            'genre': translate_text(resp.get('Genre', 'N/A')),
-            'actors': translate_text(resp.get('Actors', 'N/A')),
-            'director': translate_text(resp.get('Director', 'N/A')),
+            'genre': genre_my,
+            'actors': actors_my,
+            'director': director_my,
             'runtime': runtime,
-            'country': translate_text(resp.get('Country', 'N/A')),
-            'language': translate_text(resp.get('Language', 'N/A')),
-            'imdb_rating': resp.get('imdbRating', 'N/A'),
-            'imdb_votes': resp.get('imdbVotes', 'N/A'),
+            'country': country_my,
+            'language': language_my,
+            'imdb_rating': imdb_rating,
+            'imdb_votes': imdb_votes,
             'plot_narrative': plot_narrative,
             'poster': resp.get('Poster', 'N/A'),
         }
@@ -251,7 +265,7 @@ def format_movie_info_plain(movie):
         stars = '⭐' * int(rating // 2) + ('✨' if rating % 2 >= 0.5 else '')
     except:
         pass
-    return f"""🎬 **{movie['title']}** ({movie['year']})
+    text = f"""🎬 **{movie['title']}** ({movie['year']})
 
 📌 **အမျိုးအစား** – {movie['genre']}
 🎭 **သရုပ်ဆောင်များ** – {movie['actors']}
@@ -263,40 +277,40 @@ def format_movie_info_plain(movie):
 🗳️ **မဲအရေအတွက်** – {movie['imdb_votes']}
 
 {movie['plot_narrative']}"""
+    return text
 
 # ========== /movie Conversation ==========
 MOVIE_NAME, MOVIE_POSTER, MOVIE_VIDEO = range(3)
 
 async def movie_start(update, context):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔ Admin အတွက်သာ။")
+        await update.message.reply_text("⛔ ဤ command ကို Admin များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("🎬 ဇာတ်ကားအမည် (နှစ်) ထည့်ပါ။\nဥပမာ - /movie Inception 2010 သို့မဟုတ် အင်စက်ပရှင်")
+    await update.message.reply_text("🎬 **ဇာတ်ကားအမည်** (မြန်မာလို သို့မဟုတ် အင်္ဂလိပ်လို) နှင့် ထုတ်ဝေနှစ် (ဥပမာ - Inception 2010) ကို ရိုက်ထည့်ပါ။")
     return MOVIE_NAME
 
 async def movie_get_name(update, context):
     movie_input = update.message.text.strip()
-    msg = await update.message.reply_text(f"🔍 '{movie_input}' ကိုရှာနေသည်...")
+    msg = await update.message.reply_text(f"🔍 '{movie_input}' ကို ရှာဖွေနေပါသည်...")
     movie = get_movie_info(movie_input)
     if not movie:
-        await msg.edit_text("မတွေ့ပါ။ အင်္ဂလိပ်အမည်အပြည့်ထည့်ပါ။")
+        await msg.edit_text("❌ ဇာတ်ကား ရှာမတွေ့ပါ။ ကျေးဇူးပြု၍ အင်္ဂလိပ်အမည်အပြည့်ဖြင့် ထပ်စမ်းပါ။")
         return MOVIE_NAME
     context.user_data['movie_data'] = movie
-    await msg.edit_text(f"✅ တွေ့ရှိပါသည်။\n\n{format_movie_info_plain(movie)}")
-    await update.message.reply_text("📸 Poster ပုံပို့ပါ။")
+    await msg.edit_text(f"✅ **တွေ့ရှိပါသည်။**\n\n{format_movie_info_plain(movie)}")
+    await update.message.reply_text("📸 ယခု ဤဇာတ်ကား၏ **Poster ပုံ** ကို ပို့ပေးပါ။")
     return MOVIE_POSTER
 
 async def movie_get_poster(update, context):
     if not update.message.photo:
-        await update.message.reply_text("ပုံပို့ပါ။")
+        await update.message.reply_text("ပုံတစ်ပုံ ပို့ပေးပါ။")
         return MOVIE_POSTER
     context.user_data['poster'] = update.message.photo[-1].file_id
-    await update.message.reply_text("🎬 Video ဖိုင်ပို့ပါ။")
+    await update.message.reply_text("🎬 ယခု **Video ဖိုင်** (mp4, mkv, avi, mov) ကို ပို့ပေးပါ။")
     return MOVIE_VIDEO
 
 async def movie_get_video(update, context):
     video = None
-    file_name = None
     if update.message.video:
         video = update.message.video
         file_name = video.file_name or "movie"
@@ -306,45 +320,49 @@ async def movie_get_video(update, context):
             video = doc
             file_name = doc.file_name or "movie"
     if not video:
-        await update.message.reply_text("Video ဖိုင်ပို့ပါ။")
+        await update.message.reply_text("❌ Video ဖိုင် (mp4, mkv, avi, mov) သာ ပို့ပါ။")
         return MOVIE_VIDEO
 
     movie = context.user_data.get('movie_data')
     poster = context.user_data.get('poster')
     if not movie or not poster:
-        await update.message.reply_text("ဒေတာပျောက်နေသည်။ /movie ဖြင့်ပြန်စပါ။")
+        await update.message.reply_text("အချက်အလက်ပျောက်နေသည်။ /movie ဖြင့် ပြန်စပါ။")
         return ConversationHandler.END
 
     payload = generate_payload()
     save_file_info(payload, video.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
-    logger.info(f"Deep link created: {deep_link}")
 
+    caption = format_movie_info_plain(movie)
     keyboard = [
-        [InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)],
+        [InlineKeyboardButton("🎬 ဇာတ်ကားရယူရန်", url=deep_link)],
         [InlineKeyboardButton("🔞 လူကြီးချန်နယ်", url="https://t.me/everyboyhobby")],
         [InlineKeyboardButton("🎬 Movie Channel", url="https://t.me/moviesandseriesforallwzn")],
         [InlineKeyboardButton("🎵 မြန်မာသီချင်းချန်နယ်", url="https://t.me/wznmusiclibary")],
     ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_photo(photo=poster, caption=format_movie_info_plain(movie), reply_markup=InlineKeyboardMarkup(keyboard))
-    await update.message.reply_text(f"✅ Post ပြင်ဆင်ပြီး။\nDeep Link: {deep_link}")
+    await update.message.reply_photo(photo=poster, caption=caption, reply_markup=reply_markup)
+    await update.message.reply_text(
+        f"✅ **Post ပြင်ဆင်ပြီးပါပြီ။**\n\n"
+        f"ဇာတ်ကားရယူရန် လင့် (Deep Link):\n{deep_link}\n\n"
+        f"ဤ Post ကို သင်၏ Channel သို့ Forward လုပ်နိုင်ပါသည်။"
+    )
     context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel_movie(update, context):
-    await update.message.reply_text("Cancelled.")
+    await update.message.reply_text("လုပ်ဆောင်ချက် ပယ်ဖျက်ပြီးပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
 
-# ========== Auto Deep Link ==========
+# ========== Auto Deep Link for Admin Videos ==========
 async def auto_deep_link(update, context):
     if not is_admin(update.effective_user.id):
         return
     if context.user_data.get('movie_name') is not None:
         return
     video = None
-    file_name = None
     if update.message.video:
         video = update.message.video
         file_name = video.file_name or "video"
@@ -358,84 +376,108 @@ async def auto_deep_link(update, context):
     payload = generate_payload()
     save_file_info(payload, video.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
-    await update.message.reply_text(f"🔗 Deep Link:\n{deep_link}\n\n{file_name}")
+    await update.message.reply_text(
+        f"🔗 **သင်၏ Deep Link**\n\n{deep_link}\n\n"
+        f"**ဖိုင်အမည်:** `{file_name}`\n\n"
+        f"ဤလင့်ကို နှိပ်ရုံဖြင့် သုံးစွဲသူများ ဇာတ်ကားရယူနိုင်ပါသည်။\n"
+        f"(လိုအပ်သော Channel 4 ခုလုံး ဝင်ထားရန် လိုအပ်)",
+        parse_mode="Markdown"
+    )
 
 # ========== /start ==========
 async def start(update, context):
     user_id = update.effective_user.id
     if context.args:
         payload = context.args[0]
-        info = get_file_info(payload)
-        if not info:
-            await update.message.reply_text("လင့်မမှန်ပါ။")
+        file_info = get_file_info(payload)
+        if not file_info:
+            await update.message.reply_text("❌ လင့်မမှန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။")
             return
-        if is_user_blocked(user_id):
-            await update.message.reply_text("သင်ပိတ်ခံထားရသည်။")
+        
+        if is_user_blocked(user_id) and not is_admin(user_id):
+            await update.message.reply_text("🔒 သင်သည် block ခံထားရပါသည်။")
             return
-        ok, _ = await check_all_channels(user_id, context.bot)
+        
+        # 👑 Admin bypass channel check
+        if is_admin(user_id):
+            ok = True
+        else:
+            ok, missing = await check_all_channels(user_id, context.bot)
+        
         if not ok:
             attempts = get_attempt_count(user_id) + 1
             increment_attempts(user_id)
             if attempts >= 10:
                 block_user(user_id)
-                await update.message.reply_text("၁၀ကြိမ်ကျော်သောကြောင့်ပိတ်သည်။")
+                await update.message.reply_text("🚫 ၁၀ ကြိမ်ကျော်သောကြောင့် ပိတ်သွားပါသည်။")
                 return
-            msg = "Channel များအားလုံးဝင်ပါ:\n"
+            msg = "🎬 **ဇာတ်ကားရယူရန် အောက်ပါ Channel များအားလုံးကို ဝင်ပါ။**\n\n"
             for ch in REQUIRED_CHANNELS:
-                msg += f"• {ch['name']}: {ch['invite']}\n"
-            msg += f"\nအကြိမ်ရေ: {attempts}/10"
-            await update.message.reply_text(msg)
+                msg += f"• {ch['name']}: [ဝင်ရန်]({ch['invite']})\n"
+            msg += f"\n⚠️ အကြိမ်ရေ: {attempts}/10"
+            await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
             return
+        
+        file_id = file_info["file_id"]
+        file_name = file_info["file_name"]
         try:
-            await update.message.reply_text(f"📹 {info['file_name']} ပို့နေပါပြီ...")
-            await context.bot.send_video(chat_id=user_id, video=info['file_id'], caption=f"🎬 {info['file_name']}")
-            add_user(user_id)
-            increment_requests()
-            reset_attempts(user_id)
+            await update.message.reply_text(f"🎬 {file_name} ပို့နေပါပြီ...")
+            await context.bot.send_video(chat_id=user_id, video=file_id, caption=f"🎬 {file_name}")
+            if not is_admin(user_id):
+                add_user(user_id)
+                increment_requests()
+                reset_attempts(user_id)
         except Exception as e:
-            await update.message.reply_text(f"Error: {e}")
+            await update.message.reply_text(f"မပို့နိုင်ပါ: {e}")
     else:
         if is_admin(user_id):
             await show_menu(update, context)
         else:
-            await update.message.reply_text("🎬 မင်္ဂလာပါ။ /movie ဖြင့်ရှာနိုင်သည်။")
+            await update.message.reply_text(
+                "🎬 **မင်္ဂလာပါ။**\n\nဤ Bot သည် ဇာတ်ကားများ ဖြန့်ဝေရန် ဖြစ်ပါသည်။\n"
+                "ဇာတ်ကားရယူရန် Channel ရှိ Post ရှိ ခလုတ်ကို နှိပ်ပါ။\n"
+                "Admin များအတွက် `/menu` သုံးနိုင်ပါသည်။",
+                parse_mode="Markdown"
+            )
 
 # ---------- Admin Menu ----------
 async def show_menu(update, context):
     keyboard = [
-        [InlineKeyboardButton("🎬 Movie Post", callback_data="menu_movie")],
-        [InlineKeyboardButton("🔗 Deep Link", callback_data="menu_newfile")],
+        [InlineKeyboardButton("🎬 Movie Post ဖန်တီးရန်", callback_data="menu_movie")],
+        [InlineKeyboardButton("🔗 Deep Link ထုတ်ရန် (Video)", callback_data="menu_newfile")],
         [InlineKeyboardButton("📦 Batch Link", callback_data="menu_batch")],
-        [InlineKeyboardButton("📊 Stats", callback_data="menu_stats")],
-        [InlineKeyboardButton("🚫 Blocklist", callback_data="menu_block")],
+        [InlineKeyboardButton("📊 စာရင်းအင်း", callback_data="menu_stats")],
+        [InlineKeyboardButton("🚫 Block စာရင်း", callback_data="menu_block")],
     ]
-    await update.message.reply_text("Admin Menu", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("🤖 Admin Menu", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def menu_callback(update, context):
     query = update.callback_query
     await query.answer()
     if not is_admin(query.from_user.id):
-        await query.edit_message_text("ခွင့်မပြု")
+        await query.edit_message_text("ခွင့်မပြုပါ")
         return
-    if query.data == "menu_movie":
-        await query.edit_message_text("/movie")
-    elif query.data == "menu_newfile":
-        await query.edit_message_text("Video ဖိုင်ပို့ပါ။")
-    elif query.data == "menu_batch":
-        await query.edit_message_text("/batchlink")
-    elif query.data == "menu_stats":
+    data = query.data
+    if data == "menu_movie":
+        await query.edit_message_text("📌 `/movie` command ကို သုံးပါ။")
+    elif data == "menu_newfile":
+        await query.edit_message_text("📤 Video ဖိုင်တစ်ခု ပို့ပါ။ ကျွန်ုပ် Deep Link ထုတ်ပေးပါမည်။")
+    elif data == "menu_batch":
+        await query.edit_message_text("📦 `/batchlink` command ကို သုံးပါ။")
+    elif data == "menu_stats":
         total_users = users_collection.count_documents({})
         total_req = get_total_requests()
-        await query.edit_message_text(f"👥 {total_users} users\n🎬 {total_req} requests")
-    elif query.data == "menu_block":
+        await query.edit_message_text(f"👥 Users: {total_users}\n🎬 Requests: {total_req}")
+    elif data == "menu_block":
         blocked = get_blocked_users()
         msg = "Blocked:\n" + "\n".join(str(uid) for uid in blocked) if blocked else "Empty"
         await query.edit_message_text(msg)
 
+# ---------- /newfile ----------
 async def newfile_command(update, context):
     if not is_admin(update.effective_user.id):
         return
-    await update.message.reply_text("Video ဖိုင်ပို့ပါ။")
+    await update.message.reply_text("📤 Video ဖိုင်တစ်ခု ပို့ပါ။ Deep Link ထုတ်ပေးမည်။")
     context.user_data['waiting_newfile'] = True
 
 async def newfile_receive(update, context):
@@ -444,7 +486,6 @@ async def newfile_receive(update, context):
     if not is_admin(update.effective_user.id):
         return
     video = None
-    file_name = None
     if update.message.video:
         video = update.message.video
         file_name = video.file_name or "video"
@@ -459,14 +500,15 @@ async def newfile_receive(update, context):
     payload = generate_payload()
     save_file_info(payload, video.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
-    await update.message.reply_text(f"Deep Link:\n{deep_link}\n\n{file_name}")
+    await update.message.reply_text(f"🔗 Deep Link:\n{deep_link}\n\n{file_name}")
     context.user_data.pop('waiting_newfile', None)
 
+# ---------- /batchlink ----------
 async def batchlink_start(update, context):
     if not is_admin(update.effective_user.id):
         return
     context.user_data['batch_videos'] = []
-    await update.message.reply_text("Batch Mode\nVideo များဆက်တိုက်ပို့ပါ။ /done")
+    await update.message.reply_text("📦 Batch Link Mode\nVideo များဆက်တိုက်ပို့ပါ။ ပြီးပါက /done")
 
 async def batchlink_receive(update, context):
     if not is_admin(update.effective_user.id):
@@ -512,6 +554,7 @@ async def cancel_batch(update, context):
     context.user_data.clear()
     await update.message.reply_text("Cancelled.")
 
+# ---------- Other Admin Commands ----------
 async def stats(update, context):
     if is_admin(update.effective_user.id):
         total_users = users_collection.count_documents({})
@@ -544,14 +587,15 @@ async def menu_command(update, context):
     if is_admin(update.effective_user.id):
         await show_menu(update, context)
 
-# ---------- Webhook ----------
+# ---------- Webhook Setup (sync version) ----------
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 if not WEBHOOK_URL:
-    logger.error("WEBHOOK_URL missing")
+    logger.error("WEBHOOK_URL environment variable not set!")
     sys.exit(1)
 
 telegram_app = Application.builder().token(TOKEN).build()
 
+# Handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("menu", menu_command))
 telegram_app.add_handler(CommandHandler("stats", stats))
@@ -565,6 +609,7 @@ telegram_app.add_handler(MessageHandler(filters.VIDEO | filters.Document.ALL & ~
 telegram_app.add_handler(MessageHandler(filters.VIDEO | filters.Document.ALL & ~filters.COMMAND, newfile_receive))
 telegram_app.add_handler(CallbackQueryHandler(menu_callback, pattern="menu_"))
 
+# Movie conversation
 movie_conv = ConversationHandler(
     entry_points=[CommandHandler('movie', movie_start)],
     states={
@@ -576,6 +621,7 @@ movie_conv = ConversationHandler(
 )
 telegram_app.add_handler(movie_conv)
 
+# Batch conversation
 batch_conv = ConversationHandler(
     entry_points=[CommandHandler('batchlink', batchlink_start)],
     states={0: [MessageHandler(filters.VIDEO | filters.Document.ALL, batchlink_receive)]},
@@ -583,6 +629,7 @@ batch_conv = ConversationHandler(
 )
 telegram_app.add_handler(batch_conv)
 
+# Flask webhook route (synchronous)
 @app.route('/webhook', methods=['POST'])
 def webhook():
     if request.method == "POST":
@@ -600,7 +647,7 @@ def start_flask():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, use_reloader=False)
 
-async def setup_webhook():
+async def set_webhook():
     await telegram_app.bot.set_webhook(WEBHOOK_URL)
     logger.info(f"Webhook set to {WEBHOOK_URL}")
 
@@ -608,7 +655,7 @@ if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(telegram_app.initialize())
-    loop.run_until_complete(setup_webhook())
+    loop.run_until_complete(set_webhook())
     threading.Thread(target=start_flask, daemon=True).start()
     try:
         loop.run_forever()
