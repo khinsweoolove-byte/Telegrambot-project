@@ -76,7 +76,7 @@ async def check_all_channels(user_id, bot):
             return False, ch
     return True, None
 
-# ---------- Existing: Admin file upload → Deep Link ----------
+# ---------- Existing: Admin file upload → Deep Link (keep as is) ----------
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
@@ -114,7 +114,7 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"Anyone who clicks this link will get the file (after joining required channels)."
     )
 
-# ---------- /post command (no initial text) ----------
+# ========== /post command (no initial text) ==========
 POST_PHOTO, POST_MOVIE = range(2)
 
 async def post_start_no_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -171,8 +171,8 @@ async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- /post with text: /post Some caption ----------
-POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(3, 6)
+# ========== /post with text: e.g., /post This is my movie caption ==========
+POST_TEXT_PHOTO, POST_TEXT_MOVIE = range(10, 12)
 
 async def post_with_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -182,7 +182,8 @@ async def post_with_text_start(update: Update, context: ContextTypes.DEFAULT_TYP
     if context.args:
         context.user_data['custom_text'] = ' '.join(context.args)
     else:
-        context.user_data['custom_text'] = ""
+        await update.message.reply_text("Please use: /post Your caption text here")
+        return ConversationHandler.END
     await update.message.reply_text("📸 Now send the poster image.")
     return POST_TEXT_PHOTO
 
@@ -191,12 +192,7 @@ async def post_text_receive_photo(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text("Please send a photo.")
         return POST_TEXT_PHOTO
     context.user_data['poster'] = update.message.photo[-1].file_id
-    # If there is custom text, we can ask for confirmation or just proceed
-    custom_text = context.user_data.get('custom_text', '')
-    if custom_text:
-        await update.message.reply_text(f"📝 Your caption:\n{custom_text}\n\nNow send the movie file.")
-    else:
-        await update.message.reply_text("📝 Now send the movie file (or send text first).")
+    await update.message.reply_text("🎬 Now send the movie file.")
     return POST_TEXT_MOVIE
 
 async def post_text_receive_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -223,11 +219,7 @@ async def post_text_receive_movie(update: Update, context: ContextTypes.DEFAULT_
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
-    if custom_text:
-        caption = f"{custom_text}\n\n🎬 Click below to get the movie."
-    else:
-        caption = "🎬 **New Movie Post**\n\nClick the button below to get the movie."
-
+    caption = f"{custom_text}\n\n🎬 Click below to get the movie."
     keyboard = [[InlineKeyboardButton("🎬 ဇာတ်ကားရယူရန်", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
@@ -243,9 +235,70 @@ async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- Deep link handler for users ----------
+# ========== Deep link handler for users (Admin bypass channel check) ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    
+    # Admin bypass channel check
+    if is_admin(user_id):
+        # If admin, just send welcome or menu
+        if not context.args:
+            await update.message.reply_text(
+                "🎬 **Admin Panel**\n\n"
+                "Send any file to get a deep link.\n"
+                "Use /post to create a movie post with poster + video.\n"
+                "Use /post Your caption to create a post with custom text."
+            )
+        else:
+            payload = context.args[0]
+            file_id, file_name = get_file(payload)
+            if not file_id:
+                await update.message.reply_text("❌ Invalid or expired link.")
+                return
+            # Admin gets file directly without channel check
+            try:
+                if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
+                    sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
+                elif file_name.endswith(('.mp4', '.mkv', '.avi')):
+                    sent_msg = await context.bot.send_video(chat_id=user_id, video=file_id, caption=f"📂 {file_name}")
+                else:
+                    sent_msg = await context.bot.send_document(chat_id=user_id, document=file_id, filename=file_name)
+                
+                warning_text = (
+                    "⚠️ ⚠️ ⚠️ **အရေးကြီးပါတယ်** ⚠️ ⚠️ ⚠️\n\n"
+                    "ဤရုပ်ရှင်ဖိုင်များ/ဗီဒီယိုများကို 5 မိနစ်အတွင်း (မူပိုင်ခွင့်ပြဿနာများကြောင့်) ဖျက်ပါမည်။\n\n"
+                    "ကျေးဇူးပြု၍ ဤဖိုင်များ/ဗီဒီယိုများအားလုံးကို သင်၏ Saved Messages များသို့ Forward လုပ်ပြီး ထိုနေရာတွင် ဇာတ်ကားအား ကြည့်ရှုပါ။\n\n"
+                    "ကျွန်ုပ်၏ Channel ကို လာရောက်အားပေးမှုအတွက် ကျေးဇူးအထူးတင်ပါတယ် 🙏🙏🙏\n\n"
+                    "Channel ရေရှည်တည်တံ့ဖို့အတွက် Support ပေးချင်ပါက Wave Pay (09767011991) ကို ကူညီနိုင်ပါတယ်။\n\n"
+                    "အားလုံးကို ကျေးဇူးတင်ပါတယ်။\n\n"
+                    "!!! IMPORTANT !!!\n"
+                    "This Movie Files/Videos will be deleted in 5 mins (Due to Copyright Issues).\n"
+                    "Please forward these ALL Files/Videos to your Saved Messages and start downloading there."
+                )
+                keyboard = [
+                    [InlineKeyboardButton("🎬 Movie Channel", url="https://t.me/moviesandseriesforallwzn")],
+                    [InlineKeyboardButton("🔞 Adult Channel", url="https://t.me/everyboyhobby")],
+                    [InlineKeyboardButton("🎵 Music Channel", url="https://t.me/wznmusiclibary")],
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text, reply_markup=reply_markup, parse_mode="Markdown")
+                
+                async def delete_files():
+                    await asyncio.sleep(300)
+                    try:
+                        await context.bot.delete_message(chat_id=user_id, message_id=sent_msg.message_id)
+                    except:
+                        pass
+                    try:
+                        await context.bot.delete_message(chat_id=user_id, message_id=warn_msg.message_id)
+                    except:
+                        pass
+                asyncio.create_task(delete_files())
+            except Exception as e:
+                await update.message.reply_text(f"❌ Error sending file: {e}")
+        return
+    
+    # For non-admin users
     if not context.args:
         await update.message.reply_text(
             "🎬 **File to Deep Link Bot**\n\n"
@@ -296,7 +349,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text, reply_markup=reply_markup, parse_mode="Markdown")
-
+        
         async def delete_files():
             await asyncio.sleep(300)
             try:
@@ -307,7 +360,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.delete_message(chat_id=user_id, message_id=warn_msg.message_id)
             except:
                 pass
-
         asyncio.create_task(delete_files())
     except Exception as e:
         await update.message.reply_text(f"❌ Error sending file: {e}")
