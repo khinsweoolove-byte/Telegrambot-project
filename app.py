@@ -76,7 +76,7 @@ async def check_all_channels(user_id, bot):
             return False, ch
     return True, None
 
-# ---------- Admin file upload → Deep Link (existing) ----------
+# ---------- Admin file upload -> Deep Link ----------
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
@@ -114,17 +114,17 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"Anyone who clicks this link will get the file (after joining required channels)."
     )
 
-# ========== /post command (no text) ==========
+# ---------- /post command (without text) ----------
 POST_PHOTO, POST_MOVIE = range(2)
 
-async def post_start_no_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_no_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ Admin only.")
         return ConversationHandler.END
     await update.message.reply_text("📸 Please send the poster image.")
     return POST_PHOTO
 
-async def post_receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_no_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("Please send a photo.")
         return POST_PHOTO
@@ -132,7 +132,7 @@ async def post_receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("🎬 Now send the movie file (video or document).")
     return POST_MOVIE
 
-async def post_receive_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_no_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     file_obj = None
     file_name = "movie"
@@ -171,32 +171,29 @@ async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ========== /post with text (command with arguments) ==========
-# Use a different set of states to avoid conflict
-POSTTEXT_PHOTO, POSTTEXT_MOVIE = range(10, 12)
+# ---------- /post with text ----------
+POST_TEXT_PHOTO, POST_TEXT_MOVIE = range(10, 12)
 
 async def post_with_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ Admin only.")
         return ConversationHandler.END
-    # Capture the text after /post command
-    if context.args:
-        context.user_data['custom_text'] = ' '.join(context.args)
-    else:
-        await update.message.reply_text("Please use: /post Your caption text here")
+    if not context.args:
+        await update.message.reply_text("Usage: /post Your caption text here")
         return ConversationHandler.END
+    context.user_data['custom_text'] = ' '.join(context.args)
     await update.message.reply_text("📸 Now send the poster image.")
-    return POSTTEXT_PHOTO
+    return POST_TEXT_PHOTO
 
-async def post_text_receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_with_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("Please send a photo.")
-        return POSTTEXT_PHOTO
+        return POST_TEXT_PHOTO
     context.user_data['poster'] = update.message.photo[-1].file_id
     await update.message.reply_text("🎬 Now send the movie file.")
-    return POSTTEXT_MOVIE
+    return POST_TEXT_MOVIE
 
-async def post_text_receive_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_with_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     file_obj = None
     file_name = "movie"
@@ -208,7 +205,7 @@ async def post_text_receive_movie(update: Update, context: ContextTypes.DEFAULT_
         file_name = file_obj.file_name or "movie"
     else:
         await message.reply_text("Please send a video file.")
-        return POSTTEXT_MOVIE
+        return POST_TEXT_MOVIE
 
     poster = context.user_data.get('poster')
     custom_text = context.user_data.get('custom_text', '')
@@ -236,21 +233,14 @@ async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ========== Deep link handler (Admin bypass channel check) ==========
+# ---------- Deep link handler (Admin bypass channel check) ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # Admin bypass channel check
+    # Admin
     if is_admin(user_id):
-        if not context.args:
-            await update.message.reply_text(
-                "🎬 **Admin Panel**\n\n"
-                "Send any file to get a deep link.\n"
-                "Use /post to create a movie post with poster + video.\n"
-                "Use /post Your caption to create a post with custom text."
-            )
-            return
-        else:
+        # If there's a payload (deep link clicked by admin)
+        if context.args:
             payload = context.args[0]
             file_id, file_name = get_file(payload)
             if not file_id:
@@ -296,6 +286,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 asyncio.create_task(delete_files())
             except Exception as e:
                 await update.message.reply_text(f"❌ Error sending file: {e}")
+        else:
+            # No payload, just welcome message for admin
+            await update.message.reply_text(
+                "🎬 **Admin Panel**\n\n"
+                "Send any file to get a deep link.\n"
+                "Use /post to create a movie post with poster + video.\n"
+                "Use /post Your caption to create a post with custom text."
+            )
         return
     
     # Non-admin users
@@ -376,27 +374,27 @@ telegram_app = Application.builder().token(TOKEN).build()
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
 
-# /post conversation (no text)
-post_conv = ConversationHandler(
-    entry_points=[CommandHandler('post', post_start_no_text)],
+# /post without text
+post_no_text_conv = ConversationHandler(
+    entry_points=[CommandHandler('post', post_no_text_start)],
     states={
-        POST_PHOTO: [MessageHandler(filters.PHOTO, post_receive_photo)],
-        POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_receive_movie)],
+        POST_PHOTO: [MessageHandler(filters.PHOTO, post_no_text_photo)],
+        POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_no_text_movie)],
     },
     fallbacks=[CommandHandler('cancel', cancel_post)],
 )
-telegram_app.add_handler(post_conv)
+telegram_app.add_handler(post_no_text_conv)
 
-# /post with text conversation
-post_text_conv = ConversationHandler(
+# /post with text (command arguments)
+post_with_text_conv = ConversationHandler(
     entry_points=[CommandHandler('post', post_with_text_start, filters=filters.COMMAND)],
     states={
-        POSTTEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_receive_photo)],
-        POSTTEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_receive_movie)],
+        POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_with_text_photo)],
+        POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_with_text_movie)],
     },
     fallbacks=[CommandHandler('cancel', cancel_post_text)],
 )
-telegram_app.add_handler(post_text_conv)
+telegram_app.add_handler(post_with_text_conv)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
