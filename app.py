@@ -1,12 +1,11 @@
 import os
 import asyncio
-import threading
 import logging
 import sys
 import secrets
 import re
 from datetime import datetime
-from flask import Flask
+from flask import Flask, request
 import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -18,40 +17,27 @@ from pymongo import MongoClient
 from telegraph import Telegraph
 from deep_translator import GoogleTranslator
 
-# ---------- Logging ----------
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ---------- Flask ----------
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "Movie Bot is running!"
-
-@app.route('/health')
-def health():
-    return "OK", 200
-
-# ---------- MongoDB Connection with SSL fix ----------
+# ---------- MongoDB ----------
 MONGO_URI = os.environ.get("MONGO_URI")
 if not MONGO_URI:
-    logger.error("MONGO_URI environment variable not set!")
+    logger.error("MONGO_URI not set")
     sys.exit(1)
 
-# ✅ FIX: Add tlsAllowInvalidCertificates=True to bypass SSL handshake error
 try:
-    mongo_client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True)
-    # Test connection
+    mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
+    mongo_client.admin.command('ping')
+    logger.info("MongoDB connected successfully")
+except Exception as e:
+    logger.warning(f"MongoDB connection failed with normal client: {e}")
+    logger.info("Attempting with tlsAllowInvalidCertificates=True...")
+    mongo_client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True, serverSelectionTimeoutMS=5000)
     mongo_client.admin.command('ping')
     logger.info("MongoDB connected successfully (SSL validation bypassed)")
-except Exception as e:
-    logger.error(f"MongoDB connection failed: {e}")
-    sys.exit(1)
 
 db = mongo_client["movie_bot_v3"]
 file_store_collection = db["file_store"]
@@ -59,6 +45,7 @@ users_collection = db["users"]
 stats_collection = db["stats"]
 blocked_collection = db["blocked_users"]
 
+# ---------- Helper Functions (simplified) ----------
 def init_stats():
     if stats_collection.count_documents({"_id": "total_requests"}) == 0:
         stats_collection.insert_one({"_id": "total_requests", "count": 0})
@@ -128,7 +115,6 @@ if not BOT_USERNAME:
 
 ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_ID", "").split(",") if x.strip()]
 
-# Required channels for deep link access
 REQUIRED_CHANNELS = [
     {"id": "-1003753299714", "name": "🎬 ဇာတ်ကားချန်နယ် (ပင်မ)", "invite": "https://t.me/wznmoviescollector"},
     {"id": "-1003899625672", "name": "🎬 ဇာတ်ကားချန်နယ် (အရံ)", "invite": "https://t.me/moviesandseriesforallwzn"},
@@ -325,7 +311,6 @@ async def movie_get_poster(update, context):
 
 async def movie_get_video(update, context):
     video = None
-    file_name = None
     if update.message.video:
         video = update.message.video
         file_name = video.file_name or "movie"
@@ -344,12 +329,10 @@ async def movie_get_video(update, context):
         await update.message.reply_text("အချက်အလက်ပျောက်နေသည်။ /movie ဖြင့် ပြန်စပါ။")
         return ConversationHandler.END
 
-    # Generate deep link for the video
     payload = generate_payload()
     save_file_info(payload, video.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
-    # Prepare final post
     caption = format_movie_info_plain(movie)
     keyboard = [
         [InlineKeyboardButton("🎬 ဇာတ်ကားရယူရန်", url=deep_link)],
@@ -377,11 +360,9 @@ async def cancel_movie(update, context):
 async def auto_deep_link(update, context):
     if not is_admin(update.effective_user.id):
         return
-    # Avoid interfering with /movie conversation
-    if context.user_data.get('movie_data') is not None:
+    if context.user_data.get('movie_name') is not None:
         return
     video = None
-    file_name = None
     if update.message.video:
         video = update.message.video
         file_name = video.file_name or "video"
@@ -402,88 +383,6 @@ async def auto_deep_link(update, context):
         f"(လိုအပ်သော Channel 4 ခုလုံး ဝင်ထားရန် လိုအပ်)",
         parse_mode="Markdown"
     )
-
-# ========== /newfile (explicit) ==========
-async def newfile_command(update, context):
-    if not is_admin(update.effective_user.id):
-        return
-    await update.message.reply_text("📤 Video ဖိုင်တစ်ခု ပို့ပါ။ Deep Link ထုတ်ပေးမည်။")
-    context.user_data['waiting_newfile'] = True
-
-async def newfile_receive(update, context):
-    if not context.user_data.get('waiting_newfile'):
-        return
-    if not is_admin(update.effective_user.id):
-        return
-    video = None
-    file_name = None
-    if update.message.video:
-        video = update.message.video
-        file_name = video.file_name or "video"
-    elif update.message.document:
-        doc = update.message.document
-        if doc.mime_type and doc.mime_type.startswith('video/'):
-            video = doc
-            file_name = doc.file_name or "video"
-    if not video:
-        await update.message.reply_text("Video ဖိုင်ပို့ပါ။")
-        return
-    payload = generate_payload()
-    save_file_info(payload, video.file_id, file_name)
-    deep_link = create_deep_linked_url(BOT_USERNAME, payload)
-    await update.message.reply_text(f"🔗 Deep Link:\n{deep_link}\n\n{file_name}")
-    context.user_data.pop('waiting_newfile', None)
-
-# ========== /batchlink ==========
-async def batchlink_start(update, context):
-    if not is_admin(update.effective_user.id):
-        return
-    context.user_data['batch_videos'] = []
-    await update.message.reply_text("📦 Batch Link Mode\nVideo များဆက်တိုက်ပို့ပါ။ ပြီးပါက /done")
-
-async def batchlink_receive(update, context):
-    if not is_admin(update.effective_user.id):
-        return
-    if 'batch_videos' not in context.user_data:
-        return
-    video = None
-    name = None
-    if update.message.video:
-        video = update.message.video
-        name = video.file_name or "video"
-    elif update.message.document:
-        doc = update.message.document
-        if doc.mime_type and doc.mime_type.startswith('video/'):
-            video = doc
-            name = doc.file_name or "video"
-    if not video:
-        await update.message.reply_text("Video ပို့ပါ")
-        return
-    context.user_data['batch_videos'].append({"file_id": video.file_id, "name": name})
-    await update.message.reply_text(f"✅ #{len(context.user_data['batch_videos'])}: {name}")
-
-async def batchlink_done(update, context):
-    if not is_admin(update.effective_user.id):
-        return
-    videos = context.user_data.get('batch_videos', [])
-    if not videos:
-        await update.message.reply_text("ဗီဒီယိုမရှိပါ")
-        return
-    results = []
-    for v in videos:
-        payload = generate_payload()
-        save_file_info(payload, v["file_id"], v["name"])
-        link = create_deep_linked_url(BOT_USERNAME, payload)
-        results.append(f"• {v['name']}\n  {link}")
-    text = "Batch Links:\n" + "\n".join(results)
-    if len(text) > 4000:
-        text = text[:4000] + "..."
-    await update.message.reply_text(text)
-    context.user_data.clear()
-
-async def cancel_batch(update, context):
-    context.user_data.clear()
-    await update.message.reply_text("Cancelled.")
 
 # ========== /start ==========
 async def start(update, context):
@@ -562,6 +461,87 @@ async def menu_callback(update, context):
         msg = "Blocked:\n" + "\n".join(str(uid) for uid in blocked) if blocked else "Empty"
         await query.edit_message_text(msg)
 
+# ---------- /newfile ----------
+async def newfile_command(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    await update.message.reply_text("📤 Video ဖိုင်တစ်ခု ပို့ပါ။ Deep Link ထုတ်ပေးမည်။")
+    context.user_data['waiting_newfile'] = True
+
+async def newfile_receive(update, context):
+    if not context.user_data.get('waiting_newfile'):
+        return
+    if not is_admin(update.effective_user.id):
+        return
+    video = None
+    if update.message.video:
+        video = update.message.video
+        file_name = video.file_name or "video"
+    elif update.message.document:
+        doc = update.message.document
+        if doc.mime_type and doc.mime_type.startswith('video/'):
+            video = doc
+            file_name = doc.file_name or "video"
+    if not video:
+        await update.message.reply_text("Video ဖိုင်ပို့ပါ။")
+        return
+    payload = generate_payload()
+    save_file_info(payload, video.file_id, file_name)
+    deep_link = create_deep_linked_url(BOT_USERNAME, payload)
+    await update.message.reply_text(f"🔗 Deep Link:\n{deep_link}\n\n{file_name}")
+    context.user_data.pop('waiting_newfile', None)
+
+# ---------- /batchlink ----------
+async def batchlink_start(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    context.user_data['batch_videos'] = []
+    await update.message.reply_text("📦 Batch Link Mode\nVideo များဆက်တိုက်ပို့ပါ။ ပြီးပါက /done")
+
+async def batchlink_receive(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    if 'batch_videos' not in context.user_data:
+        return
+    video = None
+    name = None
+    if update.message.video:
+        video = update.message.video
+        name = video.file_name or "video"
+    elif update.message.document:
+        doc = update.message.document
+        if doc.mime_type and doc.mime_type.startswith('video/'):
+            video = doc
+            name = doc.file_name or "video"
+    if not video:
+        await update.message.reply_text("Video ပို့ပါ")
+        return
+    context.user_data['batch_videos'].append({"file_id": video.file_id, "name": name})
+    await update.message.reply_text(f"✅ #{len(context.user_data['batch_videos'])}: {name}")
+
+async def batchlink_done(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    videos = context.user_data.get('batch_videos', [])
+    if not videos:
+        await update.message.reply_text("ဗီဒီယိုမရှိပါ")
+        return
+    results = []
+    for v in videos:
+        payload = generate_payload()
+        save_file_info(payload, v["file_id"], v["name"])
+        link = create_deep_linked_url(BOT_USERNAME, payload)
+        results.append(f"• {v['name']}\n  {link}")
+    text = "Batch Links:\n" + "\n".join(results)
+    if len(text) > 4000:
+        text = text[:4000] + "..."
+    await update.message.reply_text(text)
+    context.user_data.clear()
+
+async def cancel_batch(update, context):
+    context.user_data.clear()
+    await update.message.reply_text("Cancelled.")
+
 # ---------- Other Admin Commands ----------
 async def stats(update, context):
     if is_admin(update.effective_user.id):
@@ -595,46 +575,79 @@ async def menu_command(update, context):
     if is_admin(update.effective_user.id):
         await show_menu(update, context)
 
-# ---------- Application ----------
-def main():
-    application = Application.builder().token(TOKEN).build()
+# ---------- Webhook Setup ----------
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
+if not WEBHOOK_URL:
+    logger.error("WEBHOOK_URL environment variable not set!")
+    sys.exit(1)
 
-    # Conversations
-    movie_conv = ConversationHandler(
-        entry_points=[CommandHandler('movie', movie_start)],
-        states={
-            MOVIE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, movie_get_name)],
-            MOVIE_POSTER: [MessageHandler(filters.PHOTO, movie_get_poster)],
-            MOVIE_VIDEO: [MessageHandler(filters.VIDEO | filters.Document.ALL, movie_get_video)],
-        },
-        fallbacks=[CommandHandler('cancel', cancel_movie)],
-    )
+# Create Application
+telegram_app = Application.builder().token(TOKEN).build()
 
-    batch_conv = ConversationHandler(
-        entry_points=[CommandHandler('batchlink', batchlink_start)],
-        states={0: [MessageHandler(filters.VIDEO | filters.Document.ALL, batchlink_receive)]},
-        fallbacks=[CommandHandler('done', batchlink_done), CommandHandler('cancel', cancel_batch)],
-    )
+# Add handlers
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("menu", menu_command))
+telegram_app.add_handler(CommandHandler("stats", stats))
+telegram_app.add_handler(CommandHandler("blocklist", blocklist))
+telegram_app.add_handler(CommandHandler("unblock", unblock))
+telegram_app.add_handler(CommandHandler("newfile", newfile_command))
+telegram_app.add_handler(CommandHandler("batchlink", batchlink_start))
+telegram_app.add_handler(CommandHandler("done", batchlink_done))
+telegram_app.add_handler(CommandHandler("cancel", cancel_batch))
+telegram_app.add_handler(MessageHandler(filters.VIDEO | filters.Document.ALL & ~filters.COMMAND, auto_deep_link))
+telegram_app.add_handler(MessageHandler(filters.VIDEO | filters.Document.ALL & ~filters.COMMAND, newfile_receive))
+telegram_app.add_handler(CallbackQueryHandler(menu_callback, pattern="menu_"))
 
-    application.add_handler(movie_conv)
-    application.add_handler(batch_conv)
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("newfile", newfile_command))
-    application.add_handler(MessageHandler(filters.VIDEO | filters.Document.ALL & ~filters.COMMAND, newfile_receive))
-    application.add_handler(MessageHandler(filters.VIDEO | filters.Document.ALL & ~filters.COMMAND, auto_deep_link))
-    application.add_handler(CommandHandler("stats", stats))
-    application.add_handler(CommandHandler("blocklist", blocklist))
-    application.add_handler(CommandHandler("unblock", unblock))
-    application.add_handler(CommandHandler("menu", menu_command))
-    application.add_handler(CallbackQueryHandler(menu_callback, pattern="menu_"))
+# Movie conversation handler
+movie_conv = ConversationHandler(
+    entry_points=[CommandHandler('movie', movie_start)],
+    states={
+        MOVIE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, movie_get_name)],
+        MOVIE_POSTER: [MessageHandler(filters.PHOTO, movie_get_poster)],
+        MOVIE_VIDEO: [MessageHandler(filters.VIDEO | filters.Document.ALL, movie_get_video)],
+    },
+    fallbacks=[CommandHandler('cancel', cancel_movie)],
+)
+telegram_app.add_handler(movie_conv)
 
-    # Run polling (correct for Python 3.14+)
-    application.run_polling()
+# Batch conversation handler
+batch_conv = ConversationHandler(
+    entry_points=[CommandHandler('batchlink', batchlink_start)],
+    states={0: [MessageHandler(filters.VIDEO | filters.Document.ALL, batchlink_receive)]},
+    fallbacks=[CommandHandler('done', batchlink_done), CommandHandler('cancel', cancel_batch)],
+)
+telegram_app.add_handler(batch_conv)
+
+# Flask route for webhook
+@app.route('/webhook', methods=['POST'])
+async def webhook():
+    if request.method == "POST":
+        try:
+            json_data = request.get_json(force=True)
+            update = Update.de_json(json_data, telegram_app.bot)
+            await telegram_app.process_update(update)
+            return "ok", 200
+        except Exception as e:
+            logger.exception("Webhook error")
+            return "error", 500
+    return "method not allowed", 405
+
+async def setup_webhook():
+    await telegram_app.bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"Webhook set to {WEBHOOK_URL}")
+
+def start_flask():
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 if __name__ == "__main__":
-    # Flask thread
-    def run_flask():
-        port = int(os.environ.get("PORT", 5000))
-        app.run(host="0.0.0.0", port=port, use_reloader=False)
-    threading.Thread(target=run_flask, daemon=True).start()
-    main()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(telegram_app.initialize())
+    loop.run_until_complete(setup_webhook())
+    import threading
+    threading.Thread(target=start_flask, daemon=True).start()
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        loop.run_until_complete(telegram_app.shutdown())
