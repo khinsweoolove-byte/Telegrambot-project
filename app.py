@@ -123,7 +123,6 @@ async def check_all_channels(user_id, bot):
 
 # ---------- Auto-delete helper ----------
 async def delete_messages_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_ids: list, delay_seconds: int = 300):
-    """Delete given messages after specified delay"""
     await asyncio.sleep(delay_seconds)
     for msg_id in message_ids:
         try:
@@ -132,16 +131,16 @@ async def delete_messages_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_i
         except Exception as e:
             logger.warning(f"Failed to delete message {msg_id}: {e}")
 
-# ---------- Conversation states (fixed - separate ranges) ----------
-POST_PHOTO, POST_MOVIE = range(1, 3)           # states for /post
-POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)  # states for /post_text
+# ---------- Conversation states ----------
+POST_PHOTO, POST_MOVIE = range(2)
+POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
 
 # ---------- /post conversation ----------
 async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ။")
+    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ။\n(စာသားပါလျှင် caption တွင် ထည့်နိုင်သည်)")
     return POST_PHOTO
 
 async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -149,6 +148,11 @@ async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_PHOTO
     context.user_data['poster'] = update.message.photo[-1].file_id
+    # Capture caption if provided with photo
+    if update.message.caption:
+        context.user_data['photo_caption'] = update.message.caption
+    else:
+        context.user_data['photo_caption'] = None
     await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
     return POST_MOVIE
 
@@ -167,6 +171,7 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return POST_MOVIE
 
     poster = context.user_data.get('poster')
+    photo_caption = context.user_data.get('photo_caption')
     if not poster:
         await message.reply_text("ပိုစတာ မတွေ့ပါ။ /post ဖြင့် ပြန်စတင်ပါ။")
         return ConversationHandler.END
@@ -175,7 +180,11 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
-    caption = "🎬 **ရုပ်ရှင်အသစ်**\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
+    # Use photo caption if provided, otherwise default
+    if photo_caption:
+        caption = f"{photo_caption}\n\n🎬 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
+    else:
+        caption = "🎬 **ရုပ်ရှင်အသစ်**\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
     keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
@@ -191,12 +200,12 @@ async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- /post_text conversation (fixed) ----------
+# ---------- /post_text conversation ----------
 async def post_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ။")
+    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ။\n(စာသားပါလျှင် caption တွင် ထည့်နိုင်သည်)")
     return POST_TEXT_PHOTO
 
 async def post_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -204,11 +213,18 @@ async def post_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_TEXT_PHOTO
     context.user_data['poster'] = update.message.photo[-1].file_id
-    await update.message.reply_text("✍️ ယခု ဇာတ်ကားအကြောင်း စာသား (ဇာတ်ညွှန်း) ကို ပို့ပေးပါ။")
+    # Capture caption if provided with photo
+    if update.message.caption:
+        context.user_data['photo_caption'] = update.message.caption
+    else:
+        context.user_data['photo_caption'] = None
+    await update.message.reply_text("✍️ ယခု ဇာတ်ကားအကြောင်း စာသား (ဇာတ်ညွှန်း) ကို ပို့ပေးပါ။\n(သင်ပုံနဲ့ပို့ပြီးပြီဆိုလျှင် 'skip' ရိုက်ပါ)")
     return POST_TEXT_CAPTION
 
 async def post_text_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption_text = update.message.text
+    if caption_text.lower() == 'skip':
+        caption_text = ""
     context.user_data['caption_text'] = caption_text
     context.user_data['telegraph_url'] = None
 
@@ -243,6 +259,7 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return POST_TEXT_MOVIE
 
     poster = context.user_data.get('poster')
+    photo_caption = context.user_data.get('photo_caption')
     caption_text = context.user_data.get('caption_text', '')
     telegraph_url = context.user_data.get('telegraph_url')
     if not poster:
@@ -253,20 +270,24 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
+    # Build final caption: priority: photo_caption (if any) + manual text / telegraph
+    final_caption_parts = []
+    if photo_caption:
+        final_caption_parts.append(photo_caption)
     if telegraph_url:
-        preview = caption_text[:300] + "..." if len(caption_text) > 300 else caption_text
-        caption = f"{preview}\n\n📖 [ဇာတ်ညွှန်းအပြည့်အစုံဖတ်ရန်]({telegraph_url})\n\n🎬 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
-        parse_mode = "Markdown"
-    else:
-        caption = f"{caption_text}\n\n🎬 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
-        parse_mode = None
+        final_caption_parts.append(f"📖 [ဇာတ်ညွှန်းအပြည့်အစုံဖတ်ရန်]({telegraph_url})")
+    elif caption_text:
+        final_caption_parts.append(caption_text)
+    final_caption_parts.append("🎬 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။")
+    caption = "\n\n".join(final_caption_parts)
+    parse_mode = "Markdown" if (telegraph_url or caption_text) else None
 
     keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await message.reply_photo(photo=poster, caption=caption, reply_markup=reply_markup, parse_mode=parse_mode)
+    await message.reply_photo(photo=poster, caption=caption, reply_markup=reply_markup, parse_mode=parse_mode if parse_mode else None)
     await message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
@@ -407,7 +428,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_delete":
         await query.edit_message_text("🗑️ `/delete <payload>` - သိမ်းဆည်းထားသော ဖိုင်တစ်ခုကို ဖျက်ရန်။")
 
-# ---------- Start handler ----------
+# ---------- Start handler (Admin panel with buttons + User deep link) ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
@@ -532,27 +553,20 @@ if not WEBHOOK_URL:
 
 telegram_app = Application.builder().token(TOKEN).build()
 
-# Conversation handlers (order matters - more specific first)
+telegram_app.add_handler(ConversationHandler(
+    entry_points=[CommandHandler('post', post_start)],
+    states={POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
+            POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_movie)]},
+    fallbacks=[CommandHandler('cancel', cancel_post)],
+))
 telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post_text', post_text_start)],
-    states={
-        POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
-        POST_TEXT_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_text_caption)],
-        POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)],
-    },
+    states={POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
+            POST_TEXT_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_text_caption)],
+            POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)]},
     fallbacks=[CommandHandler('cancel', cancel_post_text)],
 ))
 
-telegram_app.add_handler(ConversationHandler(
-    entry_points=[CommandHandler('post', post_start)],
-    states={
-        POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
-        POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_movie)],
-    },
-    fallbacks=[CommandHandler('cancel', cancel_post)],
-))
-
-# Command handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("stats", stats_command))
 telegram_app.add_handler(CommandHandler("broadcast", broadcast_command))
@@ -561,7 +575,6 @@ telegram_app.add_handler(CommandHandler("delete", delete_command))
 telegram_app.add_handler(CommandHandler("menu", admin_menu))
 telegram_app.add_handler(CallbackQueryHandler(menu_callback, pattern="cmd_"))
 
-# File upload handler (must be last)
 telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
 
 @app.route('/webhook', methods=['POST'])
