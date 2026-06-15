@@ -26,7 +26,6 @@ try:
     mongo_client.admin.command('ping')
     logger.info("MongoDB connected")
 except:
-    logger.warning("SSL error, retrying with tlsAllowInvalidCertificates")
     mongo_client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True, serverSelectionTimeoutMS=5000)
 
 db = mongo_client["file_share_bot"]
@@ -114,7 +113,7 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"Anyone who clicks this link will get the file (after joining required channels)."
     )
 
-# ---------- /post command (without text) ----------
+# ========== /post (without text) ==========
 POST_PHOTO, POST_MOVIE = range(2)
 
 async def post_no_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -171,7 +170,7 @@ async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- /post with text ----------
+# ========== /post with text ==========
 POST_TEXT_PHOTO, POST_TEXT_MOVIE = range(10, 12)
 
 async def post_with_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -233,13 +232,12 @@ async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- Deep link handler (Admin bypass channel check) ----------
+# ---------- Deep link handler ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # Admin
+    # Admin: bypass channel check, just serve file or show menu
     if is_admin(user_id):
-        # If there's a payload (deep link clicked by admin)
         if context.args:
             payload = context.args[0]
             file_id, file_name = get_file(payload)
@@ -287,7 +285,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 await update.message.reply_text(f"❌ Error sending file: {e}")
         else:
-            # No payload, just welcome message for admin
             await update.message.reply_text(
                 "🎬 **Admin Panel**\n\n"
                 "Send any file to get a deep link.\n"
@@ -370,7 +367,6 @@ if not WEBHOOK_URL:
 
 telegram_app = Application.builder().token(TOKEN).build()
 
-# Command handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
 
@@ -385,7 +381,7 @@ post_no_text_conv = ConversationHandler(
 )
 telegram_app.add_handler(post_no_text_conv)
 
-# /post with text (command arguments)
+# /post with text
 post_with_text_conv = ConversationHandler(
     entry_points=[CommandHandler('post', post_with_text_start, filters=filters.COMMAND)],
     states={
