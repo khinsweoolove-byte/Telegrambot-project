@@ -19,14 +19,6 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "Bot is running", 200
-
-@app.route('/health')
-def health():
-    return "OK", 200
-
 # ---------- MongoDB ----------
 MONGO_URI = os.environ.get("MONGO_URI")
 if not MONGO_URI:
@@ -148,7 +140,7 @@ async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ။\nCaption ပါရင် ထည့်ပေးနိုင်ပါသည်။")
+    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ။ ပုံပို့ရာတွင် **Caption** ထည့်ပေးနိုင်ပါသည်။")
     return POST_PHOTO
 
 async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -156,7 +148,11 @@ async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_PHOTO
     context.user_data['poster'] = update.message.photo[-1].file_id
-    context.user_data['caption'] = update.message.caption or ""  # Store caption if any
+    # Save caption if provided
+    if update.message.caption:
+        context.user_data['photo_caption'] = update.message.caption
+    else:
+        context.user_data['photo_caption'] = None
     await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
     return POST_MOVIE
 
@@ -175,6 +171,7 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return POST_MOVIE
 
     poster = context.user_data.get('poster')
+    photo_caption = context.user_data.get('photo_caption')
     if not poster:
         await message.reply_text("ပိုစတာ မတွေ့ပါ။ /post ဖြင့် ပြန်စတင်ပါ။")
         return ConversationHandler.END
@@ -183,9 +180,9 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
-    user_caption = context.user_data.get('caption', '')
-    if user_caption:
-        caption = f"{user_caption}\n\n🎬 **ရုပ်ရှင်အသစ်**\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
+    # Build caption with optional user-provided caption
+    if photo_caption:
+        caption = f"{photo_caption}\n\n🎬 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
     else:
         caption = "🎬 **ရုပ်ရှင်အသစ်**\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
     keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
@@ -208,7 +205,7 @@ async def post_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ။\nCaption ပါရင် ထည့်ပေးနိုင်ပါသည်။")
+    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ။ ပုံပို့ရာတွင် **Caption** ထည့်ပေးနိုင်ပါသည်။")
     return POST_TEXT_PHOTO
 
 async def post_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -216,7 +213,11 @@ async def post_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_TEXT_PHOTO
     context.user_data['poster'] = update.message.photo[-1].file_id
-    context.user_data['photo_caption'] = update.message.caption or ""  # Store photo caption if any
+    # Save caption if provided
+    if update.message.caption:
+        context.user_data['photo_caption'] = update.message.caption
+    else:
+        context.user_data['photo_caption'] = None
     await update.message.reply_text("✍️ ယခု ဇာတ်ကားအကြောင်း စာသား (ဇာတ်ညွှန်း) ကို ပို့ပေးပါ။")
     return POST_TEXT_CAPTION
 
@@ -256,9 +257,9 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return POST_TEXT_MOVIE
 
     poster = context.user_data.get('poster')
+    photo_caption = context.user_data.get('photo_caption')
     caption_text = context.user_data.get('caption_text', '')
     telegraph_url = context.user_data.get('telegraph_url')
-    photo_caption = context.user_data.get('photo_caption', '')
     if not poster:
         await message.reply_text("ပိုစတာ မတွေ့ပါ။ /post_text ဖြင့် ပြန်စတင်ပါ။")
         return ConversationHandler.END
@@ -267,26 +268,26 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
-    # Combine photo caption and text caption
-    if photo_caption:
-        full_caption = photo_caption + "\n\n"
-    else:
-        full_caption = ""
-
+    # Build the final caption
     if telegraph_url:
         preview = caption_text[:300] + "..." if len(caption_text) > 300 else caption_text
-        full_caption += f"{preview}\n\n📖 [ဇာတ်ညွှန်းအပြည့်အစုံဖတ်ရန်]({telegraph_url})\n\n🎬 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
+        desc_part = f"{preview}\n\n📖 [ဇာတ်ညွှန်းအပြည့်အစုံဖတ်ရန်]({telegraph_url})"
         parse_mode = "Markdown"
     else:
-        full_caption += f"{caption_text}\n\n🎬 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
+        desc_part = caption_text
         parse_mode = None
+
+    if photo_caption:
+        final_caption = f"{photo_caption}\n\n{desc_part}\n\n🎬 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
+    else:
+        final_caption = f"{desc_part}\n\n🎬 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
 
     keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await message.reply_photo(photo=poster, caption=full_caption, reply_markup=reply_markup, parse_mode=parse_mode)
+    await message.reply_photo(photo=poster, caption=final_caption, reply_markup=reply_markup, parse_mode=parse_mode)
     await message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
@@ -427,7 +428,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_delete":
         await query.edit_message_text("🗑️ `/delete <payload>` - သိမ်းဆည်းထားသော ဖိုင်တစ်ခုကို ဖျက်ရန်။")
 
-# ---------- Start handler ----------
+# ---------- Start handler (Admin panel with buttons + User deep link) ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
