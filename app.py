@@ -1,5 +1,6 @@
 import os
 import asyncio
+import threading
 import logging
 import sys
 import secrets
@@ -45,7 +46,6 @@ users_collection = db["users"]
 stats_collection = db["stats"]
 blocked_collection = db["blocked_users"]
 
-# ---------- Helper Functions (simplified) ----------
 def init_stats():
     if stats_collection.count_documents({"_id": "total_requests"}) == 0:
         stats_collection.insert_one({"_id": "total_requests", "count": 0})
@@ -618,29 +618,30 @@ batch_conv = ConversationHandler(
 )
 telegram_app.add_handler(batch_conv)
 
-# Flask route for webhook
+# Flask route for webhook (sync version)
 @app.route('/webhook', methods=['POST'])
-async def webhook():
+def webhook():
     if request.method == "POST":
         try:
             json_data = request.get_json(force=True)
             update = Update.de_json(json_data, telegram_app.bot)
-            await telegram_app.process_update(update)
+            asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), loop)
             return "ok", 200
         except Exception as e:
             logger.exception("Webhook error")
             return "error", 500
     return "method not allowed", 405
 
-async def setup_webhook():
-    await telegram_app.bot.set_webhook(WEBHOOK_URL)
-    logger.info(f"Webhook set to {WEBHOOK_URL}")
-
 def start_flask():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, use_reloader=False)
 
+async def setup_webhook():
+    await telegram_app.bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"Webhook set to {WEBHOOK_URL}")
+
 if __name__ == "__main__":
+    # Create a global event loop
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(telegram_app.initialize())
