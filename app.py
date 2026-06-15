@@ -6,10 +6,7 @@ import secrets
 from datetime import datetime
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    Application, CommandHandler, MessageHandler, filters, ContextTypes,
-    ConversationHandler
-)
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 from telegram.helpers import create_deep_linked_url
 from pymongo import MongoClient
 
@@ -79,7 +76,7 @@ async def check_all_channels(user_id, bot):
             return False, ch
     return True, None
 
-# ---------- Admin file upload → Deep Link (original feature) ----------
+# ---------- Existing: Admin file upload → Deep Link ----------
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
@@ -117,115 +114,136 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"Anyone who clicks this link will get the file (after joining required channels)."
     )
 
-# ========== /post command (without text) ==========
-POST_PHOTO, POST_VIDEO = range(2)
+# ---------- /post command (no initial text) ----------
+POST_PHOTO, POST_MOVIE = range(2)
 
-async def post_no_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_start_no_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ Admin only.")
         return ConversationHandler.END
-    await update.message.reply_text("📸 Send me the poster image.")
+    await update.message.reply_text("📸 Please send the poster image.")
     return POST_PHOTO
 
-async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("Please send a photo.")
         return POST_PHOTO
     context.user_data['poster'] = update.message.photo[-1].file_id
-    await update.message.reply_text("🎬 Now send me the movie video file.")
-    return POST_VIDEO
+    await update.message.reply_text("🎬 Now send the movie file (video or document).")
+    return POST_MOVIE
 
-async def post_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    video = None
-    if update.message.video:
-        video = update.message.video
-        file_name = video.file_name or "movie"
-    elif update.message.document and update.message.document.mime_type.startswith('video/'):
-        video = update.message.document
-        file_name = video.file_name or "movie"
+async def post_receive_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    file_obj = None
+    file_name = "movie"
+    if message.video:
+        file_obj = message.video
+        file_name = file_obj.file_name or "video"
+    elif message.document and message.document.mime_type and message.document.mime_type.startswith('video/'):
+        file_obj = message.document
+        file_name = file_obj.file_name or "movie"
     else:
-        await update.message.reply_text("Please send a video file (mp4, mkv, etc.)")
-        return POST_VIDEO
-
-    payload = generate_payload()
-    save_file(payload, video.file_id, file_name)
-    deep_link = create_deep_linked_url(BOT_USERNAME, payload)
+        await message.reply_text("Please send a video file (mp4, mkv, etc.)")
+        return POST_MOVIE
 
     poster = context.user_data.get('poster')
-    caption = "🎬 **ဇာတ်ကား**\n\nအောက်ပါခလုတ်ကိုနှိပ်ပြီး ရယူပါ။"
+    if not poster:
+        await message.reply_text("Poster not found. Please restart /post.")
+        return ConversationHandler.END
+
+    payload = generate_payload()
+    save_file(payload, file_obj.file_id, file_name)
+    deep_link = create_deep_linked_url(BOT_USERNAME, payload)
+
+    caption = "🎬 **New Movie Post**\n\nClick the button below to get the movie."
     keyboard = [[InlineKeyboardButton("🎬 ဇာတ်ကားရယူရန်", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_photo(photo=poster, caption=caption, reply_markup=reply_markup)
-    await update.message.reply_text("✅ Post created successfully.")
+    await message.reply_photo(photo=poster, caption=caption, reply_markup=reply_markup, parse_mode="Markdown")
+    await message.reply_text("✅ Post created successfully!")
     context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Cancelled.")
+    await update.message.reply_text("Post creation cancelled.")
     context.user_data.clear()
     return ConversationHandler.END
 
-# ========== /post with text ==========
-POST_TEXT_CAPTION, POST_TEXT_PHOTO, POST_TEXT_VIDEO = range(3)
+# ---------- /post with text: /post Some caption ----------
+POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(3, 6)
 
-async def post_with_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_with_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ Admin only.")
         return ConversationHandler.END
-    # Extract text after /post
-    if not context.args:
-        await update.message.reply_text("Usage: /post your caption text here")
-        return ConversationHandler.END
-    caption = ' '.join(context.args)
-    context.user_data['post_caption'] = caption
-    await update.message.reply_text("📸 Now send me the poster image.")
+    # Capture the text after /post command
+    if context.args:
+        context.user_data['custom_text'] = ' '.join(context.args)
+    else:
+        context.user_data['custom_text'] = ""
+    await update.message.reply_text("📸 Now send the poster image.")
     return POST_TEXT_PHOTO
 
-async def post_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_text_receive_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("Please send a photo.")
         return POST_TEXT_PHOTO
     context.user_data['poster'] = update.message.photo[-1].file_id
-    await update.message.reply_text("🎬 Now send me the movie video file.")
-    return POST_TEXT_VIDEO
-
-async def post_text_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    video = None
-    if update.message.video:
-        video = update.message.video
-        file_name = video.file_name or "movie"
-    elif update.message.document and update.message.document.mime_type.startswith('video/'):
-        video = update.message.document
-        file_name = video.file_name or "movie"
+    # If there is custom text, we can ask for confirmation or just proceed
+    custom_text = context.user_data.get('custom_text', '')
+    if custom_text:
+        await update.message.reply_text(f"📝 Your caption:\n{custom_text}\n\nNow send the movie file.")
     else:
-        await update.message.reply_text("Please send a video file.")
-        return POST_TEXT_VIDEO
+        await update.message.reply_text("📝 Now send the movie file (or send text first).")
+    return POST_TEXT_MOVIE
 
-    payload = generate_payload()
-    save_file(payload, video.file_id, file_name)
-    deep_link = create_deep_linked_url(BOT_USERNAME, payload)
+async def post_text_receive_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    file_obj = None
+    file_name = "movie"
+    if message.video:
+        file_obj = message.video
+        file_name = file_obj.file_name or "video"
+    elif message.document and message.document.mime_type and message.document.mime_type.startswith('video/'):
+        file_obj = message.document
+        file_name = file_obj.file_name or "movie"
+    else:
+        await message.reply_text("Please send a video file.")
+        return POST_TEXT_MOVIE
 
     poster = context.user_data.get('poster')
-    caption = context.user_data.get('post_caption', '🎬 ဇာတ်ကား')
+    custom_text = context.user_data.get('custom_text', '')
+    if not poster:
+        await message.reply_text("Poster not found. Please restart /post.")
+        return ConversationHandler.END
+
+    payload = generate_payload()
+    save_file(payload, file_obj.file_id, file_name)
+    deep_link = create_deep_linked_url(BOT_USERNAME, payload)
+
+    if custom_text:
+        caption = f"{custom_text}\n\n🎬 Click below to get the movie."
+    else:
+        caption = "🎬 **New Movie Post**\n\nClick the button below to get the movie."
+
     keyboard = [[InlineKeyboardButton("🎬 ဇာတ်ကားရယူရန်", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    await update.message.reply_photo(photo=poster, caption=caption, reply_markup=reply_markup)
-    await update.message.reply_text("✅ Post with text created successfully.")
+    await message.reply_photo(photo=poster, caption=caption, reply_markup=reply_markup, parse_mode="Markdown")
+    await message.reply_text("✅ Post created successfully!")
     context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Cancelled.")
+    await update.message.reply_text("Post creation cancelled.")
     context.user_data.clear()
     return ConversationHandler.END
 
-# ========== Deep link handler for users ==========
+# ---------- Deep link handler for users ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not context.args:
@@ -247,7 +265,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not ok:
         msg = "🎬 **ဖိုင်ရယူရန် အောက်ပါ Channel များအားလုံးကို ဝင်ထားပါ။**\n\n"
         for ch in REQUIRED_CHANNELS:
-            status = "❌" if ch["id"] == missing_ch["id"] else "✅"
+            status = "✅" if ch["id"] != missing_ch["id"] else "❌"
             msg += f"{status} {ch['name']}: [ဝင်ရန်]({ch['invite']})\n"
         await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
         return
@@ -289,6 +307,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.delete_message(chat_id=user_id, message_id=warn_msg.message_id)
             except:
                 pass
+
         asyncio.create_task(delete_files())
     except Exception as e:
         await update.message.reply_text(f"❌ Error sending file: {e}")
@@ -301,55 +320,31 @@ if not WEBHOOK_URL:
 
 telegram_app = Application.builder().token(TOKEN).build()
 
-# Register handlers
-telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
+# Command handlers
 telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
 
-# /post command (no text)
+# /post conversation (no initial text)
 post_conv = ConversationHandler(
-    entry_points=[CommandHandler('post', post_no_text)],
+    entry_points=[CommandHandler('post', post_start_no_text)],
     states={
-        POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
-        POST_VIDEO: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_video)],
+        POST_PHOTO: [MessageHandler(filters.PHOTO, post_receive_photo)],
+        POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_receive_movie)],
     },
     fallbacks=[CommandHandler('cancel', cancel_post)],
 )
 telegram_app.add_handler(post_conv)
 
-# /post with text (usage: /post some caption)
+# /post with text conversation (command with arguments)
 post_text_conv = ConversationHandler(
-    entry_points=[CommandHandler('post', post_with_text, filters=filters.COMMAND & ~filters.Regex(r'^/post$'))],
+    entry_points=[CommandHandler('post', post_with_text_start, filters=filters.COMMAND)],
     states={
-        POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
-        POST_TEXT_VIDEO: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_video)],
+        POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_receive_photo)],
+        POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_receive_movie)],
     },
     fallbacks=[CommandHandler('cancel', cancel_post_text)],
 )
-# Note: Since both use the same command name, we need to differentiate. Better to use different commands.
-# To simplify, we'll use /post for no-text and /posttext for text version.
-# Let's adjust: /post (no text), /posttext (with text)
-
-# Redefine for clarity:
-async def posttext_command(update, context):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("Admin only.")
-        return ConversationHandler.END
-    if not context.args:
-        await update.message.reply_text("Usage: /posttext your caption here")
-        return ConversationHandler.END
-    context.user_data['post_caption'] = ' '.join(context.args)
-    await update.message.reply_text("📸 Send poster image.")
-    return POST_TEXT_PHOTO
-
-posttext_conv = ConversationHandler(
-    entry_points=[CommandHandler('posttext', posttext_command)],
-    states={
-        POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
-        POST_TEXT_VIDEO: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_video)],
-    },
-    fallbacks=[CommandHandler('cancel', cancel_post_text)],
-)
-telegram_app.add_handler(posttext_conv)
+telegram_app.add_handler(post_text_conv)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -371,11 +366,6 @@ async def set_webhook():
     logger.info(f"Webhook set to {WEBHOOK_URL}")
 
 if __name__ == "__main__":
-    # Add root route to avoid 404
-    @app.route('/')
-    def home():
-        return "Bot is running", 200
-
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(telegram_app.initialize())
