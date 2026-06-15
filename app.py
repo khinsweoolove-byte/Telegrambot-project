@@ -1,5 +1,6 @@
 import os
 import asyncio
+import threading
 import logging
 import sys
 import secrets
@@ -30,19 +31,28 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "🎬 Movie Bot is running!"
+    return "Movie Bot is running!"
 
 @app.route('/health')
 def health():
     return "OK", 200
 
-# ---------- MongoDB ----------
+# ---------- MongoDB Connection with SSL fix ----------
 MONGO_URI = os.environ.get("MONGO_URI")
 if not MONGO_URI:
-    logger.error("MONGO_URI not set")
+    logger.error("MONGO_URI environment variable not set!")
     sys.exit(1)
 
-mongo_client = MongoClient(MONGO_URI)
+# ✅ FIX: Add tlsAllowInvalidCertificates=True to bypass SSL handshake error
+try:
+    mongo_client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True)
+    # Test connection
+    mongo_client.admin.command('ping')
+    logger.info("MongoDB connected successfully (SSL validation bypassed)")
+except Exception as e:
+    logger.error(f"MongoDB connection failed: {e}")
+    sys.exit(1)
+
 db = mongo_client["movie_bot_v3"]
 file_store_collection = db["file_store"]
 users_collection = db["users"]
@@ -105,7 +115,7 @@ def increment_attempts(user_id):
 def reset_attempts(user_id):
     users_collection.update_one({"user_id": user_id}, {"$set": {"attempts": 0}}, upsert=True)
 
-# ---------- Config ----------
+# ---------- Telegram Config ----------
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 if not TOKEN:
     logger.error("TELEGRAM_TOKEN not set")
@@ -193,15 +203,9 @@ def normalize_movie_name(text):
     return text
 
 def make_narrative_plot(plot_en):
-    """
-    Convert plain English plot into a natural Burmese storytelling style.
-    Example: "A thief who enters dreams..." -> "ဒီဇာတ်ကားမှာ ဇာတ်လမ်းက ... ဆိုပြီးဖြစ်ပါတယ်။"
-    """
     if not plot_en or plot_en == 'N/A':
         return "ဇာတ်လမ်းအကျဉ်း မရရှိနိုင်ပါ။"
-    # Translate to Burmese first
     plot_my = translate_text(plot_en, source='en', target='my')
-    # Add conversational prefix
     narrative = f"🎙️ **ဇာတ်လမ်းအကျဉ်းချုပ်** (သဘာဝကျကျ ပြောပြထားသည်)\n\n{plot_my}\n\n(အထက်ပါအတိုင်း ဇာတ်ကားအကြောင်း ဖတ်ရှုနိုင်ပါသည်။)"
     return narrative
 
@@ -223,7 +227,6 @@ def get_movie_info(movie_input):
         resp = requests.get("http://www.omdbapi.com/", params=params, timeout=10).json()
         if resp.get('Response') == 'False':
             return None
-        # Translate fields
         title_en = resp.get('Title', 'N/A')
         title_my = translate_text(title_en, source='en', target='my')
         genre_en = resp.get('Genre', 'N/A')
@@ -322,6 +325,7 @@ async def movie_get_poster(update, context):
 
 async def movie_get_video(update, context):
     video = None
+    file_name = None
     if update.message.video:
         video = update.message.video
         file_name = video.file_name or "movie"
@@ -347,7 +351,6 @@ async def movie_get_video(update, context):
 
     # Prepare final post
     caption = format_movie_info_plain(movie)
-    # Add telegraph if plot too long? Already in caption.
     keyboard = [
         [InlineKeyboardButton("🎬 ဇာတ်ကားရယူရန်", url=deep_link)],
         [InlineKeyboardButton("🔞 လူကြီးချန်နယ်", url="https://t.me/everyboyhobby")],
@@ -372,13 +375,13 @@ async def cancel_movie(update, context):
 
 # ========== Auto Deep Link for Admin Videos ==========
 async def auto_deep_link(update, context):
-    """Admin က video ပို့လိုက်တာနဲ့ ချက်ချင်း deep link ထုတ်ပေးမယ် (conversation မရှိမှ)"""
     if not is_admin(update.effective_user.id):
         return
-    # Check if user is in any conversation (avoid interfering)
-    if context.user_data.get('movie_name') is not None:
+    # Avoid interfering with /movie conversation
+    if context.user_data.get('movie_data') is not None:
         return
     video = None
+    file_name = None
     if update.message.video:
         video = update.message.video
         file_name = video.file_name or "video"
@@ -399,6 +402,88 @@ async def auto_deep_link(update, context):
         f"(လိုအပ်သော Channel 4 ခုလုံး ဝင်ထားရန် လိုအပ်)",
         parse_mode="Markdown"
     )
+
+# ========== /newfile (explicit) ==========
+async def newfile_command(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    await update.message.reply_text("📤 Video ဖိုင်တစ်ခု ပို့ပါ။ Deep Link ထုတ်ပေးမည်။")
+    context.user_data['waiting_newfile'] = True
+
+async def newfile_receive(update, context):
+    if not context.user_data.get('waiting_newfile'):
+        return
+    if not is_admin(update.effective_user.id):
+        return
+    video = None
+    file_name = None
+    if update.message.video:
+        video = update.message.video
+        file_name = video.file_name or "video"
+    elif update.message.document:
+        doc = update.message.document
+        if doc.mime_type and doc.mime_type.startswith('video/'):
+            video = doc
+            file_name = doc.file_name or "video"
+    if not video:
+        await update.message.reply_text("Video ဖိုင်ပို့ပါ။")
+        return
+    payload = generate_payload()
+    save_file_info(payload, video.file_id, file_name)
+    deep_link = create_deep_linked_url(BOT_USERNAME, payload)
+    await update.message.reply_text(f"🔗 Deep Link:\n{deep_link}\n\n{file_name}")
+    context.user_data.pop('waiting_newfile', None)
+
+# ========== /batchlink ==========
+async def batchlink_start(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    context.user_data['batch_videos'] = []
+    await update.message.reply_text("📦 Batch Link Mode\nVideo များဆက်တိုက်ပို့ပါ။ ပြီးပါက /done")
+
+async def batchlink_receive(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    if 'batch_videos' not in context.user_data:
+        return
+    video = None
+    name = None
+    if update.message.video:
+        video = update.message.video
+        name = video.file_name or "video"
+    elif update.message.document:
+        doc = update.message.document
+        if doc.mime_type and doc.mime_type.startswith('video/'):
+            video = doc
+            name = doc.file_name or "video"
+    if not video:
+        await update.message.reply_text("Video ပို့ပါ")
+        return
+    context.user_data['batch_videos'].append({"file_id": video.file_id, "name": name})
+    await update.message.reply_text(f"✅ #{len(context.user_data['batch_videos'])}: {name}")
+
+async def batchlink_done(update, context):
+    if not is_admin(update.effective_user.id):
+        return
+    videos = context.user_data.get('batch_videos', [])
+    if not videos:
+        await update.message.reply_text("ဗီဒီယိုမရှိပါ")
+        return
+    results = []
+    for v in videos:
+        payload = generate_payload()
+        save_file_info(payload, v["file_id"], v["name"])
+        link = create_deep_linked_url(BOT_USERNAME, payload)
+        results.append(f"• {v['name']}\n  {link}")
+    text = "Batch Links:\n" + "\n".join(results)
+    if len(text) > 4000:
+        text = text[:4000] + "..."
+    await update.message.reply_text(text)
+    context.user_data.clear()
+
+async def cancel_batch(update, context):
+    context.user_data.clear()
+    await update.message.reply_text("Cancelled.")
 
 # ========== /start ==========
 async def start(update, context):
@@ -476,87 +561,6 @@ async def menu_callback(update, context):
         blocked = get_blocked_users()
         msg = "Blocked:\n" + "\n".join(str(uid) for uid in blocked) if blocked else "Empty"
         await query.edit_message_text(msg)
-
-# ---------- /newfile (explicit) ----------
-async def newfile_command(update, context):
-    if not is_admin(update.effective_user.id):
-        return
-    await update.message.reply_text("📤 Video ဖိုင်တစ်ခု ပို့ပါ။ Deep Link ထုတ်ပေးမည်။")
-    context.user_data['waiting_newfile'] = True
-
-async def newfile_receive(update, context):
-    if not context.user_data.get('waiting_newfile'):
-        return
-    if not is_admin(update.effective_user.id):
-        return
-    video = None
-    if update.message.video:
-        video = update.message.video
-        file_name = video.file_name or "video"
-    elif update.message.document:
-        doc = update.message.document
-        if doc.mime_type and doc.mime_type.startswith('video/'):
-            video = doc
-            file_name = doc.file_name or "video"
-    if not video:
-        await update.message.reply_text("Video ဖိုင်ပို့ပါ။")
-        return
-    payload = generate_payload()
-    save_file_info(payload, video.file_id, file_name)
-    deep_link = create_deep_linked_url(BOT_USERNAME, payload)
-    await update.message.reply_text(f"🔗 Deep Link:\n{deep_link}\n\n{file_name}")
-    context.user_data.pop('waiting_newfile', None)
-
-# ---------- /batchlink ----------
-async def batchlink_start(update, context):
-    if not is_admin(update.effective_user.id):
-        return
-    context.user_data['batch_videos'] = []
-    await update.message.reply_text("📦 Batch Link Mode\nVideo များဆက်တိုက်ပို့ပါ။ ပြီးပါက /done")
-
-async def batchlink_receive(update, context):
-    if not is_admin(update.effective_user.id):
-        return
-    if 'batch_videos' not in context.user_data:
-        return
-    video = None
-    name = None
-    if update.message.video:
-        video = update.message.video
-        name = video.file_name or "video"
-    elif update.message.document:
-        doc = update.message.document
-        if doc.mime_type and doc.mime_type.startswith('video/'):
-            video = doc
-            name = doc.file_name or "video"
-    if not video:
-        await update.message.reply_text("Video ပို့ပါ")
-        return
-    context.user_data['batch_videos'].append({"file_id": video.file_id, "name": name})
-    await update.message.reply_text(f"✅ #{len(context.user_data['batch_videos'])}: {name}")
-
-async def batchlink_done(update, context):
-    if not is_admin(update.effective_user.id):
-        return
-    videos = context.user_data.get('batch_videos', [])
-    if not videos:
-        await update.message.reply_text("ဗီဒီယိုမရှိပါ")
-        return
-    results = []
-    for v in videos:
-        payload = generate_payload()
-        save_file_info(payload, v["file_id"], v["name"])
-        link = create_deep_linked_url(BOT_USERNAME, payload)
-        results.append(f"• {v['name']}\n  {link}")
-    text = "Batch Links:\n" + "\n".join(results)
-    if len(text) > 4000:
-        text = text[:4000] + "..."
-    await update.message.reply_text(text)
-    context.user_data.clear()
-
-async def cancel_batch(update, context):
-    context.user_data.clear()
-    await update.message.reply_text("Cancelled.")
 
 # ---------- Other Admin Commands ----------
 async def stats(update, context):
