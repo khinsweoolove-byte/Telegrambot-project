@@ -96,9 +96,47 @@ async def check_all_channels(user_id, bot):
             return False, ch
     return True, None
 
-# ========== CONVERSATION HANDLERS (must be added first) ==========
+# ========== STANDALONE DEEP LINK HANDLER (for any file, without command) ==========
+async def auto_deep_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+    
+    # Skip if user is in an active conversation (to avoid interfering with /post or /post_text)
+    if context.user_data:
+        return
+    
+    message = update.message
+    file_obj = None
+    file_name = "file"
+    
+    if message.document:
+        file_obj = message.document
+        file_name = file_obj.file_name or "document"
+    elif message.video:
+        file_obj = message.video
+        file_name = file_obj.file_name or "video"
+    elif message.photo:
+        file_obj = message.photo[-1]
+        file_name = "photo.jpg"
+    elif message.audio:
+        file_obj = message.audio
+        file_name = file_obj.file_name or "audio"
+    else:
+        return  # not a file, ignore
+    
+    payload = generate_payload()
+    save_file(payload, file_obj.file_id, file_name)
+    deep_link = create_deep_linked_url(BOT_USERNAME, payload)
+    
+    await message.reply_text(
+        f"🔗 **သင်၏ Deep Link အဆင်သင့်ဖြစ်ပါပြီ။**\n\n"
+        f"**ဖိုင်အမည်:** `{file_name}`\n"
+        f"**လင့်ခ်:**\n{deep_link}\n\n"
+        f"ဤလင့်ခ်ကို နှိပ်သူတိုင်း (လိုအပ်သော Channel များဝင်ပြီးပါက) ဖိုင်ကို ရယူနိုင်ပါသည်။"
+    )
 
-# ---------- /post (without text) ----------
+# ========== /post (without text) ==========
 POST_PHOTO, POST_MOVIE = range(2)
 
 async def post_no_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -155,7 +193,7 @@ async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- /post_text (with custom text) ----------
+# ========== /post_text (with custom text) ==========
 POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
 
 async def post_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -245,49 +283,7 @@ async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ========== STANDALONE FILE UPLOAD HANDLER (only when no conversation) ==========
-async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not is_admin(user_id):
-        return
-
-    # If there is any active conversation, do NOT process standalone upload
-    if context.user_data:
-        logger.info("User in conversation, skipping standalone upload.")
-        return
-
-    message = update.message
-    file_obj = None
-    file_name = "file"
-
-    if message.document:
-        file_obj = message.document
-        file_name = file_obj.file_name or "document"
-    elif message.video:
-        file_obj = message.video
-        file_name = file_obj.file_name or "video"
-    elif message.photo:
-        file_obj = message.photo[-1]
-        file_name = "photo.jpg"
-    elif message.audio:
-        file_obj = message.audio
-        file_name = file_obj.file_name or "audio"
-    else:
-        # Not a file, ignore
-        return
-
-    payload = generate_payload()
-    save_file(payload, file_obj.file_id, file_name)
-    deep_link = create_deep_linked_url(BOT_USERNAME, payload)
-
-    await message.reply_text(
-        f"🔗 **သင်၏ Deep Link အဆင်သင့်ဖြစ်ပါပြီ။**\n\n"
-        f"**ဖိုင်အမည်:** `{file_name}`\n"
-        f"**လင့်ခ်:**\n{deep_link}\n\n"
-        f"ဤလင့်ခ်ကို နှိပ်သူတိုင်း (လိုအပ်သော Channel များဝင်ပြီးပါက) ဖိုင်ကို ရယူနိုင်ပါသည်။"
-    )
-
-# ---------- Deep link handler for users ----------
+# ---------- Deep link handler for regular users ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
@@ -341,9 +337,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(
                 "🎬 **အဒ်မင် ထိန်းချုပ်မှု ဘောင်သို့ ကြိုဆိုပါသည်။**\n\n"
-                "မည်သည့်ဖိုင်ကိုမဆို ပို့ပေးလိုက်ပါက Deep Link ကို ချက်ချင်းရရှိမည်။\n"
-                "/post - ပုံနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
-                "/post_text - ပုံ၊ စာသားနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။"
+                "📤 **မည်သည့်ဖိုင်ကိုမဆို** ပို့ပေးလိုက်ပါက Deep Link ကို ချက်ချင်းရရှိမည်။\n"
+                "📝 `/post` - ပုံနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
+                "✍️ `/post_text` - ပုံ၊ စာသားနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။"
             )
         return
 
@@ -421,8 +417,7 @@ if not WEBHOOK_URL:
 
 telegram_app = Application.builder().token(TOKEN).build()
 
-# IMPORTANT: Order of handlers matters. Conversation handlers must be added first.
-# Command handlers
+# Order matters: command handlers and conversations first, then the auto deep link handler
 telegram_app.add_handler(CommandHandler("start", start))
 
 # Conversation handlers
@@ -447,8 +442,8 @@ post_text_conv = ConversationHandler(
 )
 telegram_app.add_handler(post_text_conv)
 
-# Standalone file upload handler (lowest priority)
-telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
+# Auto deep link for any file (lowest priority)
+telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, auto_deep_link))
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
