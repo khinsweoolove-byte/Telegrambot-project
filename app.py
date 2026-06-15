@@ -3,6 +3,7 @@ import asyncio
 import threading
 import logging
 import secrets
+import re
 from datetime import datetime
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -80,7 +81,7 @@ async def create_telegraph_page(title, content):
             telegraph.create_page,
             title=title,
             html_content=f"<p>{html}</p>",
-            author_name="ရုပ်ရှင်အချက်အလက်"
+            author_name="Movie Info"
         )
         return page['url']
     except:
@@ -96,10 +97,10 @@ if not TOKEN or not BOT_USERNAME:
 ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_ID", "").split(",") if x.strip()]
 
 REQUIRED_CHANNELS = [
-    {"id": "-1003753299714", "name": "🎬 ဇာတ်ကားချန်နယ် (ပင်မ)", "invite": "https://t.me/wznmoviescollector"},
-    {"id": "-1003899625672", "name": "🎬 ဇာတ်ကားချန်နယ် (အရံ)", "invite": "https://t.me/moviesandseriesforallwzn"},
-    {"id": "-1003792838735", "name": "🔞 လူကြီးများအတွက် သီးသန့်ချန်နယ်", "invite": "https://t.me/everyboyhobby"},
-    {"id": "-1003785717514", "name": "🎵 မြန်မာသီချင်းချန်နယ်", "invite": "https://t.me/wznmusiclibary"}
+    {"id": "-1003753299714", "name": "🎬 Main Movie Channel", "invite": "https://t.me/wznmoviescollector"},
+    {"id": "-1003899625672", "name": "🎬 Secondary Movie Channel", "invite": "https://t.me/moviesandseriesforallwzn"},
+    {"id": "-1003792838735", "name": "🔞 Adult Channel", "invite": "https://t.me/everyboyhobby"},
+    {"id": "-1003785717514", "name": "🎵 Myanmar Music Channel", "invite": "https://t.me/wznmusiclibary"}
 ]
 
 def is_admin(user_id):
@@ -127,9 +128,15 @@ async def delete_messages_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_i
     for msg_id in message_ids:
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            logger.info(f"Auto-deleted message {msg_id}")
+            logger.info(f"Deleted message {msg_id}")
         except Exception as e:
-            logger.warning(f"Failed to delete {msg_id}: {e}")
+            logger.warning(f"Could not delete {msg_id}: {e}")
+
+# ---------- Escape markdown to prevent parse errors ----------
+def escape_markdown(text: str) -> str:
+    """Escape special characters for MarkdownV2"""
+    special_chars = r'_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(special_chars)}])', r'\\\1', text)
 
 # ---------- Conversation states ----------
 POST_PHOTO, POST_MOVIE = range(2)
@@ -177,10 +184,16 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
     caption = context.user_data.get('caption', "🎬 **New Movie**\n\nClick below to get the movie.")
+    # Escape markdown to avoid parse errors
+    safe_caption = escape_markdown(caption) if caption else ""
     keyboard = [[InlineKeyboardButton("🎬 Get Movie", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
-    await message.reply_photo(photo=poster, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+    try:
+        await message.reply_photo(photo=poster, caption=safe_caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='MarkdownV2')
+    except Exception as e:
+        logger.warning(f"MarkdownV2 failed, sending without parse_mode: {e}")
+        await message.reply_photo(photo=poster, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard))
     await message.reply_text("✅ Post created.")
     context.user_data.clear()
     return ConversationHandler.END
@@ -250,15 +263,21 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if telegraph_url:
         preview = caption_text[:200] + "..." if len(caption_text) > 200 else caption_text
         caption = f"{preview}\n\n📖 [Read full description]({telegraph_url})\n\n🎬 Click below to get the movie."
-        parse_mode = "Markdown"
+        safe_caption = escape_markdown(caption)
+        parse = 'MarkdownV2'
     else:
         caption = f"{caption_text}\n\n🎬 Click below to get the movie."
-        parse_mode = None
+        safe_caption = escape_markdown(caption)
+        parse = 'MarkdownV2'
 
     keyboard = [[InlineKeyboardButton("🎬 Get Movie", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
-    await message.reply_photo(photo=poster, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=parse_mode)
+    try:
+        await message.reply_photo(photo=poster, caption=safe_caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=parse)
+    except Exception as e:
+        logger.warning(f"Markdown failed, sending without parse_mode: {e}")
+        await message.reply_photo(photo=poster, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard))
     await message.reply_text("✅ Post created.")
     context.user_data.clear()
     return ConversationHandler.END
@@ -303,7 +322,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     total_users = users_col.count_documents({})
     total_req = get_total_requests()
-    await update.message.reply_text(f"📊 Stats\n👥 Users: {total_users}\n🎬 Requests: {total_req}")
+    await update.message.reply_text(f"📊 **Stats**\n👥 Users: {total_users}\n🎬 Requests: {total_req}", parse_mode="Markdown")
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
@@ -427,7 +446,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             sent_msg = await context.bot.send_video(chat_id=user_id, video=file_id, caption=file_name)
         else:
             sent_msg = await context.bot.send_document(chat_id=user_id, document=file_id, filename=file_name)
-        warning_text = "⚠️ This file will be deleted in 5 mins. Forward to Saved Messages to keep it."
+        warning_text = "⚠️ This file will be deleted in 5 minutes. Forward to Saved Messages to keep it."
         warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text)
         context.application.create_task(delete_messages_after_delay(context, user_id, [sent_msg.message_id, warn_msg.message_id], 300))
         add_user(user_id)
