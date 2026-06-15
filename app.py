@@ -1,10 +1,10 @@
 import os
 import asyncio
-import threading
 import logging
 import secrets
 from datetime import datetime
-from flask import Flask, request
+from flask import Flask
+import requests
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters, ContextTypes,
@@ -18,6 +18,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
 
 # ---------- MongoDB ----------
 MONGO_URI = os.environ.get("MONGO_URI")
@@ -135,7 +139,7 @@ async def delete_messages_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_i
 POST_PHOTO, POST_MOVIE = range(2)
 POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
 
-# ---------- /post conversation (with optional caption from photo) ----------
+# ---------- /post conversation ----------
 async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
@@ -148,7 +152,6 @@ async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_PHOTO
     context.user_data['poster'] = update.message.photo[-1].file_id
-    # Save caption if provided with photo
     if update.message.caption:
         context.user_data['custom_caption'] = update.message.caption
     await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
@@ -177,7 +180,6 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
-    # Use custom caption if provided, otherwise default
     caption = context.user_data.get('custom_caption', "🎬 **ရုပ်ရှင်အသစ်**\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။")
     keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
@@ -406,7 +408,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_delete":
         await query.edit_message_text("🗑️ `/delete <payload>` ဖြင့် ဖိုင်ဖျက်နိုင်ပါသည်။")
 
-# ---------- Start handler (Admin panel with buttons + User deep link) ----------
+# ---------- Start handler ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
@@ -444,7 +446,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-                # Auto-delete after 5 minutes
                 asyncio.create_task(delete_messages_after_delay(context, user_id, [sent_msg.message_id, warn_msg.message_id], 300))
             except Exception as e:
                 await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
@@ -504,74 +505,43 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-        # Auto-delete after 5 minutes
         asyncio.create_task(delete_messages_after_delay(context, user_id, [sent_msg.message_id, warn_msg.message_id], 300))
         add_user(user_id)
         increment_requests()
     except Exception as e:
         await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
 
-# ---------- Webhook ----------
-WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
-if not WEBHOOK_URL:
-    logger.error("WEBHOOK_URL not set")
-    sys.exit(1)
-
-telegram_app = Application.builder().token(TOKEN).build()
-
-# Conversation handlers
-telegram_app.add_handler(ConversationHandler(
-    entry_points=[CommandHandler('post', post_start)],
-    states={POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
-            POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_movie)]},
-    fallbacks=[CommandHandler('cancel', cancel_post)],
-))
-telegram_app.add_handler(ConversationHandler(
-    entry_points=[CommandHandler('post_text', post_text_start)],
-    states={POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
-            POST_TEXT_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_text_caption)],
-            POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)]},
-    fallbacks=[CommandHandler('cancel', cancel_post_text)],
-))
-
-# Command handlers
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CommandHandler("stats", stats_command))
-telegram_app.add_handler(CommandHandler("broadcast", broadcast_command))
-telegram_app.add_handler(CommandHandler("cancel", cancel_command))
-telegram_app.add_handler(CommandHandler("delete", delete_command))
-telegram_app.add_handler(CommandHandler("menu", admin_menu))
-telegram_app.add_handler(CallbackQueryHandler(menu_callback, pattern="cmd_"))
-
-# Standalone file upload (lowest priority)
-telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    try:
-        data = request.get_json(force=True)
-        update = Update.de_json(data, telegram_app.bot)
-        asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), loop)
-        return "ok", 200
-    except Exception as e:
-        logger.exception("Webhook error")
-        return "error", 500
-
-def start_flask():
+# ---------- Main ----------
+def run_flask():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, use_reloader=False)
 
-async def set_webhook():
-    await telegram_app.bot.set_webhook(WEBHOOK_URL)
-    logger.info(f"Webhook set to {WEBHOOK_URL}")
-
 if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(telegram_app.initialize())
-    loop.run_until_complete(set_webhook())
-    threading.Thread(target=start_flask, daemon=True).start()
-    try:
-        loop.run_forever()
-    except KeyboardInterrupt:
-        loop.run_until_complete(telegram_app.shutdown())
+    # Start Flask in a separate thread
+    import threading
+    threading.Thread(target=run_flask, daemon=True).start()
+    # Start bot polling
+    application = Application.builder().token(TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("broadcast", broadcast_command))
+    application.add_handler(CommandHandler("cancel", cancel_command))
+    application.add_handler(CommandHandler("delete", delete_command))
+    application.add_handler(CommandHandler("menu", admin_menu))
+    application.add_handler(CallbackQueryHandler(menu_callback, pattern="cmd_"))
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler('post', post_start)],
+        states={POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
+                POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_movie)]},
+        fallbacks=[CommandHandler('cancel', cancel_post)],
+    ))
+    application.add_handler(ConversationHandler(
+        entry_points=[CommandHandler('post_text', post_text_start)],
+        states={POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
+                POST_TEXT_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_text_caption)],
+                POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)]},
+        fallbacks=[CommandHandler('cancel', cancel_post_text)],
+    ))
+    application.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
+    logger.info("Starting bot polling...")
+    application.run_polling()
