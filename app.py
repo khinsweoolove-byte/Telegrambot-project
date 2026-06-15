@@ -79,7 +79,7 @@ async def check_all_channels(user_id, bot):
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
-        await update.message.reply_text("⛔ Admin only.")
+        await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return
 
     message = update.message
@@ -99,7 +99,7 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         file_obj = message.audio
         file_name = file_obj.file_name or "audio"
     else:
-        await message.reply_text("Please send a file (document, video, photo, or audio).")
+        await message.reply_text("ကျေးဇူးပြု၍ ဖိုင် (document, video, photo, or audio) ပို့ပေးပါ။")
         return
 
     payload = generate_payload()
@@ -107,10 +107,10 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
     await message.reply_text(
-        f"🔗 **Your Deep Link is ready!**\n\n"
-        f"**File:** `{file_name}`\n"
-        f"**Link:**\n{deep_link}\n\n"
-        f"Anyone who clicks this link will get the file (after joining required channels)."
+        f"🔗 **သင်၏ Deep Link အဆင်သင့်ဖြစ်ပါပြီ။**\n\n"
+        f"**ဖိုင်အမည်:** `{file_name}`\n"
+        f"**လင့်ခ်:**\n{deep_link}\n\n"
+        f"ဤလင့်ခ်ကို နှိပ်သူတိုင်း (လိုအပ်သော Channel များဝင်ပြီးပါက) ဖိုင်ကို ရယူနိုင်ပါသည်။"
     )
 
 # ========== /post (without text) ==========
@@ -118,17 +118,17 @@ POST_PHOTO, POST_MOVIE = range(2)
 
 async def post_no_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔ Admin only.")
+        await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("📸 Please send the poster image.")
+    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ။")
     return POST_PHOTO
 
 async def post_no_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
-        await update.message.reply_text("Please send a photo.")
+        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_PHOTO
     context.user_data['poster'] = update.message.photo[-1].file_id
-    await update.message.reply_text("🎬 Now send the movie file (video or document).")
+    await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
     return POST_MOVIE
 
 async def post_no_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -142,31 +142,31 @@ async def post_no_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE)
         file_obj = message.document
         file_name = file_obj.file_name or "movie"
     else:
-        await message.reply_text("Please send a video file (mp4, mkv, etc.)")
+        await message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် (mp4, mkv, etc.) ပို့ပေးပါ။")
         return POST_MOVIE
 
     poster = context.user_data.get('poster')
     if not poster:
-        await message.reply_text("Poster not found. Please restart /post.")
+        await message.reply_text("ပိုစတာ မတွေ့ပါ။ /post ဖြင့် ပြန်စတင်ပါ။")
         return ConversationHandler.END
 
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
-    caption = "🎬 **New Movie Post**\n\nClick the button below to get the movie."
-    keyboard = [[InlineKeyboardButton("🎬 ဇာတ်ကားရယူရန်", url=deep_link)]]
+    caption = "🎬 **ရုပ်ရှင်အသစ်**\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
+    keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await message.reply_photo(photo=poster, caption=caption, reply_markup=reply_markup, parse_mode="Markdown")
-    await message.reply_text("✅ Post created successfully!")
+    await message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Post creation cancelled.")
+    await update.message.reply_text("ပိုစတာ ဖန်တီးခြင်းကို ဖျက်သိမ်းလိုက်ပါသည်။")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -175,21 +175,21 @@ POST_TEXT_PHOTO, POST_TEXT_MOVIE = range(10, 12)
 
 async def post_with_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
-        await update.message.reply_text("⛔ Admin only.")
+        await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
     if not context.args:
-        await update.message.reply_text("Usage: /post Your caption text here")
+        await update.message.reply_text("အသုံးပြုပုံ: /post သင့်စာသား ဤနေရာတွင် ရေးပါ")
         return ConversationHandler.END
     context.user_data['custom_text'] = ' '.join(context.args)
-    await update.message.reply_text("📸 Now send the poster image.")
+    await update.message.reply_text("📸 ယခု ပိုစတာ (Poster) ပုံကို ပို့ပေးပါ။")
     return POST_TEXT_PHOTO
 
 async def post_with_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
-        await update.message.reply_text("Please send a photo.")
+        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_TEXT_PHOTO
     context.user_data['poster'] = update.message.photo[-1].file_id
-    await update.message.reply_text("🎬 Now send the movie file.")
+    await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင်ကို ပို့ပေးပါ။")
     return POST_TEXT_MOVIE
 
 async def post_with_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -203,32 +203,32 @@ async def post_with_text_movie(update: Update, context: ContextTypes.DEFAULT_TYP
         file_obj = message.document
         file_name = file_obj.file_name or "movie"
     else:
-        await message.reply_text("Please send a video file.")
+        await message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် ပို့ပေးပါ။")
         return POST_TEXT_MOVIE
 
     poster = context.user_data.get('poster')
     custom_text = context.user_data.get('custom_text', '')
     if not poster:
-        await message.reply_text("Poster not found. Please restart /post.")
+        await message.reply_text("ပိုစတာ မတွေ့ပါ။ /post ဖြင့် ပြန်စတင်ပါ။")
         return ConversationHandler.END
 
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
-    caption = f"{custom_text}\n\n🎬 Click below to get the movie."
-    keyboard = [[InlineKeyboardButton("🎬 ဇာတ်ကားရယူရန်", url=deep_link)]]
+    caption = f"{custom_text}\n\n🎬 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
+    keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await message.reply_photo(photo=poster, caption=caption, reply_markup=reply_markup, parse_mode="Markdown")
-    await message.reply_text("✅ Post created successfully!")
+    await message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Post creation cancelled.")
+    await update.message.reply_text("ပိုစတာ ဖန်တီးခြင်းကို ဖျက်သိမ်းလိုက်ပါသည်။")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -236,13 +236,13 @@ async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # Admin: bypass channel check, just serve file or show menu
+    # Admin: bypass channel check
     if is_admin(user_id):
         if context.args:
             payload = context.args[0]
             file_id, file_name = get_file(payload)
             if not file_id:
-                await update.message.reply_text("❌ Invalid or expired link.")
+                await update.message.reply_text("❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။")
                 return
             try:
                 if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
@@ -283,22 +283,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         pass
                 asyncio.create_task(delete_files())
             except Exception as e:
-                await update.message.reply_text(f"❌ Error sending file: {e}")
+                await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
         else:
             await update.message.reply_text(
-                "🎬 **Admin Panel**\n\n"
-                "Send any file to get a deep link.\n"
-                "Use /post to create a movie post with poster + video.\n"
-                "Use /post Your caption to create a post with custom text."
+                "🎬 **အဒ်မင် ထိန်းချုပ်မှု ဘောင်သို့ ကြိုဆိုပါသည်။**\n\n"
+                "မည်သည့်ဖိုင်ကိုမဆို ပို့ပေးလိုက်ပါက Deep Link ကို ချက်ချင်းရရှိမည်။\n"
+                "/post - ပုံနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
+                "/post သင့်စာသား - စိတ်ကြိုက်စာသားထည့်သွင်းပြီး ပိုစတာ ဖန်တီးရန်။"
             )
         return
     
     # Non-admin users
     if not context.args:
         await update.message.reply_text(
-            "🎬 **File to Deep Link Bot**\n\n"
-            "Admin မှ ဖိုင်တစ်ခုခု ပို့လိုက်လျှင် Deep Link ထုတ်ပေးပါမည်။\n"
-            "အဆိုပါလင့်ကို နှိပ်ပါက လိုအပ်သော Channel များအားလုံးဝင်ပြီးမှ ဖိုင်ရယူနိုင်ပါသည်။\n"
+            "🎬 **ဖိုင်မှ Deep Link ဘော့**\n\n"
+            "အဒ်မင်က ဖိုင်တစ်ခုခု ပို့လိုက်လျှင် Deep Link ထုတ်ပေးပါမည်။\n"
+            "အဆိုပါလင့်ခ်ကို နှိပ်ပါက လိုအပ်သော Channel များအားလုံးဝင်ပြီးမှသာ ဖိုင်ကိုရယူနိုင်ပါသည်။\n"
             "ဖိုင်ကို 5 မိနစ်အကြာတွင် အလိုအလျောက် ဖျက်ပစ်ပါမည်။"
         )
         return
@@ -306,7 +306,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = context.args[0]
     file_id, file_name = get_file(payload)
     if not file_id:
-        await update.message.reply_text("❌ Invalid or expired link.")
+        await update.message.reply_text("❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။")
         return
 
     ok, missing_ch = await check_all_channels(user_id, context.bot)
@@ -357,7 +357,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         asyncio.create_task(delete_files())
     except Exception as e:
-        await update.message.reply_text(f"❌ Error sending file: {e}")
+        await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
 
 # ---------- Webhook ----------
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
