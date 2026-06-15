@@ -75,11 +75,13 @@ async def check_all_channels(user_id, bot):
             return False, ch
     return True, None
 
-# ---------- Admin file upload -> Deep Link ----------
+# ---------- Admin file upload -> Deep Link (only when not in any conversation) ----------
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
-        await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
+        return
+
+    if context.user_data:
         return
 
     message = update.message
@@ -170,21 +172,21 @@ async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ========== /post with text ==========
-POST_TEXT_PHOTO, POST_TEXT_MOVIE = range(10, 12)
+# ========== /post_text ==========
+POST_TEXT_PHOTO, POST_TEXT_MOVIE = range(20, 22)
 
-async def post_with_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
     if not context.args:
-        await update.message.reply_text("အသုံးပြုပုံ: /post သင့်စာသား ဤနေရာတွင် ရေးပါ")
+        await update.message.reply_text("အသုံးပြုပုံ: /post_text သင့်စာသား ဤနေရာတွင် ရေးပါ")
         return ConversationHandler.END
     context.user_data['custom_text'] = ' '.join(context.args)
     await update.message.reply_text("📸 ယခု ပိုစတာ (Poster) ပုံကို ပို့ပေးပါ။")
     return POST_TEXT_PHOTO
 
-async def post_with_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_TEXT_PHOTO
@@ -192,7 +194,7 @@ async def post_with_text_photo(update: Update, context: ContextTypes.DEFAULT_TYP
     await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင်ကို ပို့ပေးပါ။")
     return POST_TEXT_MOVIE
 
-async def post_with_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     file_obj = None
     file_name = "movie"
@@ -209,7 +211,7 @@ async def post_with_text_movie(update: Update, context: ContextTypes.DEFAULT_TYP
     poster = context.user_data.get('poster')
     custom_text = context.user_data.get('custom_text', '')
     if not poster:
-        await message.reply_text("ပိုစတာ မတွေ့ပါ။ /post ဖြင့် ပြန်စတင်ပါ။")
+        await message.reply_text("ပိုစတာ မတွေ့ပါ။ /post_text ဖြင့် ပြန်စတင်ပါ။")
         return ConversationHandler.END
 
     payload = generate_payload()
@@ -236,7 +238,6 @@ async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # Admin: bypass channel check
     if is_admin(user_id):
         if context.args:
             payload = context.args[0]
@@ -289,7 +290,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🎬 **အဒ်မင် ထိန်းချုပ်မှု ဘောင်သို့ ကြိုဆိုပါသည်။**\n\n"
                 "မည်သည့်ဖိုင်ကိုမဆို ပို့ပေးလိုက်ပါက Deep Link ကို ချက်ချင်းရရှိမည်။\n"
                 "/post - ပုံနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
-                "/post သင့်စာသား - စိတ်ကြိုက်စာသားထည့်သွင်းပြီး ပိုစတာ ဖန်တီးရန်။"
+                "/post_text သင့်စာသား - စိတ်ကြိုက်စာသားထည့်သွင်းပြီး ပိုစတာ ဖန်တီးရန်။"
             )
         return
     
@@ -381,16 +382,16 @@ post_no_text_conv = ConversationHandler(
 )
 telegram_app.add_handler(post_no_text_conv)
 
-# /post with text
-post_with_text_conv = ConversationHandler(
-    entry_points=[CommandHandler('post', post_with_text_start, filters=filters.COMMAND)],
+# /post_text with custom text
+post_text_conv = ConversationHandler(
+    entry_points=[CommandHandler('post_text', post_text_start)],
     states={
-        POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_with_text_photo)],
-        POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_with_text_movie)],
+        POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
+        POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)],
     },
     fallbacks=[CommandHandler('cancel', cancel_post_text)],
 )
-telegram_app.add_handler(post_with_text_conv)
+telegram_app.add_handler(post_text_conv)
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
