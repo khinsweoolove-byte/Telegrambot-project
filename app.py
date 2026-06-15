@@ -6,7 +6,10 @@ import secrets
 from datetime import datetime
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from telegram.ext import (
+    Application, CommandHandler, MessageHandler, filters, ContextTypes,
+    ConversationHandler
+)
 from telegram.helpers import create_deep_linked_url
 from pymongo import MongoClient
 from telegraph import Telegraph
@@ -31,6 +34,8 @@ except:
 
 db = mongo_client["file_share_bot"]
 files_col = db["files"]
+users_col = db["users"]
+stats_col = db["stats"]
 
 def save_file(payload, file_id, file_name):
     files_col.update_one({"payload": payload}, {"$set": {"file_id": file_id, "file_name": file_name}}, upsert=True)
@@ -40,6 +45,26 @@ def get_file(payload):
     if doc:
         return doc["file_id"], doc["file_name"]
     return None, None
+
+def delete_file_by_payload(payload):
+    result = files_col.delete_one({"payload": payload})
+    return result.deleted_count > 0
+
+def add_user(user_id):
+    if not users_col.find_one({"user_id": user_id}):
+        users_col.insert_one({"user_id": user_id, "first_seen": datetime.now()})
+
+def get_all_users():
+    return [doc["user_id"] for doc in users_col.find({}, {"user_id": 1})]
+
+def increment_requests():
+    stats_col.update_one({"_id": "total_requests"}, {"$inc": {"count": 1}}, upsert=True)
+    if stats_col.count_documents({"_id": "total_requests"}) == 0:
+        stats_col.insert_one({"_id": "total_requests", "count": 0})
+
+def get_total_requests():
+    doc = stats_col.find_one({"_id": "total_requests"})
+    return doc["count"] if doc else 0
 
 # ---------- Telegraph ----------
 telegraph = Telegraph()
@@ -96,57 +121,19 @@ async def check_all_channels(user_id, bot):
             return False, ch
     return True, None
 
-# ========== STANDALONE DEEP LINK HANDLER (for any file, without command) ==========
-async def auto_deep_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if not is_admin(user_id):
-        return
-    
-    # Skip if user is in an active conversation (to avoid interfering with /post or /post_text)
-    if context.user_data:
-        return
-    
-    message = update.message
-    file_obj = None
-    file_name = "file"
-    
-    if message.document:
-        file_obj = message.document
-        file_name = file_obj.file_name or "document"
-    elif message.video:
-        file_obj = message.video
-        file_name = file_obj.file_name or "video"
-    elif message.photo:
-        file_obj = message.photo[-1]
-        file_name = "photo.jpg"
-    elif message.audio:
-        file_obj = message.audio
-        file_name = file_obj.file_name or "audio"
-    else:
-        return  # not a file, ignore
-    
-    payload = generate_payload()
-    save_file(payload, file_obj.file_id, file_name)
-    deep_link = create_deep_linked_url(BOT_USERNAME, payload)
-    
-    await message.reply_text(
-        f"🔗 **သင်၏ Deep Link အဆင်သင့်ဖြစ်ပါပြီ။**\n\n"
-        f"**ဖိုင်အမည်:** `{file_name}`\n"
-        f"**လင့်ခ်:**\n{deep_link}\n\n"
-        f"ဤလင့်ခ်ကို နှိပ်သူတိုင်း (လိုအပ်သော Channel များဝင်ပြီးပါက) ဖိုင်ကို ရယူနိုင်ပါသည်။"
-    )
+# ========== Conversation Handlers ==========
 
-# ========== /post (without text) ==========
+# /post (without text)
 POST_PHOTO, POST_MOVIE = range(2)
 
-async def post_no_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
     await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ။")
     return POST_PHOTO
 
-async def post_no_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message.photo:
         await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_PHOTO
@@ -154,7 +141,7 @@ async def post_no_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
     return POST_MOVIE
 
-async def post_no_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     file_obj = None
     file_name = "movie"
@@ -189,11 +176,11 @@ async def post_no_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return ConversationHandler.END
 
 async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("ပိုစတာ ဖန်တီးခြင်းကို ဖျက်သိမ်းလိုက်ပါသည်။")
+    await update.message.reply_text("လုပ်ဆောင်ချက် ပယ်ဖျက်ပြီးပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
 
-# ========== /post_text (with custom text) ==========
+# /post_text (with description)
 POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
 
 async def post_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -229,9 +216,6 @@ async def post_text_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.error(f"Telegraph error: {e}")
             await update.message.reply_text("❌ Telegraph စာမျက်နှာ ဖန်တီးရာတွင် ချို့ယွင်းချက်ရှိသည်။")
-    else:
-        pass
-
     await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
     return POST_TEXT_MOVIE
 
@@ -239,12 +223,26 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     file_obj = None
     file_name = "movie"
+    # Log to debug
+    logger.info(f"post_text_movie called. message content type: {message.video or message.document}")
     if message.video:
         file_obj = message.video
         file_name = file_obj.file_name or "video"
-    elif message.document and message.document.mime_type and message.document.mime_type.startswith('video/'):
-        file_obj = message.document
-        file_name = file_obj.file_name or "movie"
+        logger.info(f"Video received: {file_obj.file_id}")
+    elif message.document:
+        doc = message.document
+        # Accept any video document (by mime type or extension)
+        if doc.mime_type and doc.mime_type.startswith('video/'):
+            file_obj = doc
+            file_name = doc.file_name or "movie"
+            logger.info(f"Document video received: {doc.file_id}, mime: {doc.mime_type}")
+        elif doc.file_name and doc.file_name.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
+            file_obj = doc
+            file_name = doc.file_name
+            logger.info(f"Document video by extension: {doc.file_id}, name: {doc.file_name}")
+        else:
+            await message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် (mp4, mkv, avi, mov, webm) ပို့ပေးပါ။")
+            return POST_TEXT_MOVIE
     else:
         await message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် ပို့ပေးပါ။")
         return POST_TEXT_MOVIE
@@ -279,14 +277,101 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("ပိုစတာ ဖန်တီးခြင်းကို ဖျက်သိမ်းလိုက်ပါသည်။")
+    await update.message.reply_text("လုပ်ဆောင်ချက် ပယ်ဖျက်ပြီးပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- Deep link handler for regular users ----------
+# ---------- Standalone File Upload (Instant Deep Link) ----------
+async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        return
+    if context.user_data:
+        # In a conversation, ignore
+        return
+
+    message = update.message
+    file_obj = None
+    file_name = "file"
+
+    if message.document:
+        file_obj = message.document
+        file_name = file_obj.file_name or "document"
+    elif message.video:
+        file_obj = message.video
+        file_name = file_obj.file_name or "video"
+    elif message.photo:
+        file_obj = message.photo[-1]
+        file_name = "photo.jpg"
+    elif message.audio:
+        file_obj = message.audio
+        file_name = file_obj.file_name or "audio"
+    else:
+        return
+
+    payload = generate_payload()
+    save_file(payload, file_obj.file_id, file_name)
+    deep_link = create_deep_linked_url(BOT_USERNAME, payload)
+
+    await message.reply_text(
+        f"🔗 **သင်၏ Deep Link အဆင်သင့်ဖြစ်ပါပြီ။**\n\n"
+        f"**ဖိုင်အမည်:** `{file_name}`\n"
+        f"**လင့်ခ်:**\n{deep_link}\n\n"
+        f"ဤလင့်ခ်ကို နှိပ်သူတိုင်း (လိုအပ်သော Channel များဝင်ပြီးပါက) ဖိုင်ကို ရယူနိုင်ပါသည်။"
+    )
+
+# ---------- Admin Commands (with Myanmar text and emojis) ----------
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    total_users = users_col.count_documents({})
+    total_req = get_total_requests()
+    await update.message.reply_text(
+        f"📊 **စာရင်းအင်း**\n\n👥 အသုံးပြုသူဦးရေ: {total_users}\n🎬 တောင်းဆိုမှုအရေအတွက်: {total_req}",
+        parse_mode="Markdown"
+    )
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("📢 `/broadcast <မက်ဆေ့ချ်>` ပုံစံဖြင့် သုံးပါ။")
+        return
+    msg = ' '.join(context.args)
+    users = get_all_users()
+    count = 0
+    for uid in users:
+        try:
+            await context.bot.send_message(chat_id=uid, text=f"📢 {msg}")
+            count += 1
+        except:
+            pass
+    await update.message.reply_text(f"📢 ပြန်လွှင့်ခြင်း ပြီးဆုံးပါပြီ။ လက်ခံသူ {count} ဦး။")
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data:
+        await update.message.reply_text("❌ လက်ရှိ လုပ်ဆောင်နေသော လုပ်ငန်းစဉ် မရှိပါ။")
+        return
+    context.user_data.clear()
+    await update.message.reply_text("✅ လက်ရှိလုပ်ဆောင်နေသော လုပ်ငန်းစဉ်ကို ဖျက်သိမ်းလိုက်ပါသည်။")
+
+async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("🗑️ `/delete <payload>` ပုံစံဖြင့် သုံးပါ။")
+        return
+    payload = context.args[0]
+    if delete_file_by_payload(payload):
+        await update.message.reply_text(f"✅ ဖိုင် `{payload}` ကို ဖျက်လိုက်ပါသည်။", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"❌ ဖိုင် `{payload}` မတွေ့ပါ။", parse_mode="Markdown")
+
+# ---------- Start handler (Admin panel + user deep link) ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
+    # Admin: show panel (unless payload given)
     if is_admin(user_id):
         if context.args:
             payload = context.args[0]
@@ -295,6 +380,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။")
                 return
             try:
+                # Send file to admin (same as user experience)
                 if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
                     sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
                 elif file_name.endswith(('.mp4', '.mkv', '.avi')):
@@ -332,14 +418,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except:
                         pass
                 asyncio.create_task(delete_files())
+                add_user(user_id)
+                increment_requests()
             except Exception as e:
                 await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
         else:
             await update.message.reply_text(
                 "🎬 **အဒ်မင် ထိန်းချုပ်မှု ဘောင်သို့ ကြိုဆိုပါသည်။**\n\n"
-                "📤 **မည်သည့်ဖိုင်ကိုမဆို** ပို့ပေးလိုက်ပါက Deep Link ကို ချက်ချင်းရရှိမည်။\n"
-                "📝 `/post` - ပုံနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
-                "✍️ `/post_text` - ပုံ၊ စာသားနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။"
+                "📤 မည်သည့်ဖိုင်ကိုမဆို ပို့ပေးလိုက်ပါက Deep Link ကို ချက်ချင်းရရှိမည်။\n\n"
+                "🛠️ **Command များ**\n"
+                "/post - ပုံနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
+                "/post_text - ပုံ၊ စာသားနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
+                "/stats - စာရင်းအင်းများ ကြည့်ရန်။\n"
+                "/broadcast <message> - အသုံးပြုသူအားလုံးသို့ စာပို့ရန်။\n"
+                "/cancel - လက်ရှိလုပ်ဆောင်နေသော လုပ်ငန်းစဉ်ကို ပယ်ဖျက်ရန်။\n"
+                "/delete <payload> - သိမ်းဆည်းထားသော ဖိုင်တစ်ခုကို ဖျက်ရန်။"
             )
         return
 
@@ -406,10 +499,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except:
                 pass
         asyncio.create_task(delete_files())
+        add_user(user_id)
+        increment_requests()
     except Exception as e:
         await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
 
-# ---------- Webhook Setup ----------
+# ---------- Webhook ----------
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 if not WEBHOOK_URL:
     logger.error("WEBHOOK_URL not set")
@@ -417,21 +512,16 @@ if not WEBHOOK_URL:
 
 telegram_app = Application.builder().token(TOKEN).build()
 
-# Order matters: command handlers and conversations first, then the auto deep link handler
-telegram_app.add_handler(CommandHandler("start", start))
-
-# Conversation handlers
-post_conv = ConversationHandler(
-    entry_points=[CommandHandler('post', post_no_text_start)],
+# Add conversation handlers first (important order)
+telegram_app.add_handler(ConversationHandler(
+    entry_points=[CommandHandler('post', post_start)],
     states={
-        POST_PHOTO: [MessageHandler(filters.PHOTO, post_no_text_photo)],
-        POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_no_text_movie)],
+        POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
+        POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_movie)],
     },
     fallbacks=[CommandHandler('cancel', cancel_post)],
-)
-telegram_app.add_handler(post_conv)
-
-post_text_conv = ConversationHandler(
+))
+telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post_text', post_text_start)],
     states={
         POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
@@ -439,11 +529,17 @@ post_text_conv = ConversationHandler(
         POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)],
     },
     fallbacks=[CommandHandler('cancel', cancel_post_text)],
-)
-telegram_app.add_handler(post_text_conv)
+))
 
-# Auto deep link for any file (lowest priority)
-telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, auto_deep_link))
+# Add command handlers
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(CommandHandler("stats", stats_command))
+telegram_app.add_handler(CommandHandler("broadcast", broadcast_command))
+telegram_app.add_handler(CommandHandler("cancel", cancel_command))
+telegram_app.add_handler(CommandHandler("delete", delete_command))
+
+# Standalone file upload must be after conversations to avoid stealing messages
+telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
