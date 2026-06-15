@@ -121,11 +121,13 @@ async def check_all_channels(user_id, bot):
             return False, ch
     return True, None
 
-# ========== Conversation Handlers ==========
-
-# /post (without text)
+# ---------- Conversation states ----------
+# For /post
 POST_PHOTO, POST_MOVIE = range(2)
+# For /post_text
+POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
 
+# ---------- /post conversation ----------
 async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
@@ -138,7 +140,7 @@ async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_PHOTO
     context.user_data['poster'] = update.message.photo[-1].file_id
-    await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
+    await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video သို့မဟုတ် document) ကို ပို့ပေးပါ။")
     return POST_MOVIE
 
 async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -180,9 +182,7 @@ async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# /post_text (with description)
-POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
-
+# ---------- /post_text conversation ----------
 async def post_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
@@ -223,26 +223,12 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     file_obj = None
     file_name = "movie"
-    # Log to debug
-    logger.info(f"post_text_movie called. message content type: {message.video or message.document}")
     if message.video:
         file_obj = message.video
         file_name = file_obj.file_name or "video"
-        logger.info(f"Video received: {file_obj.file_id}")
-    elif message.document:
-        doc = message.document
-        # Accept any video document (by mime type or extension)
-        if doc.mime_type and doc.mime_type.startswith('video/'):
-            file_obj = doc
-            file_name = doc.file_name or "movie"
-            logger.info(f"Document video received: {doc.file_id}, mime: {doc.mime_type}")
-        elif doc.file_name and doc.file_name.lower().endswith(('.mp4', '.mkv', '.avi', '.mov', '.webm')):
-            file_obj = doc
-            file_name = doc.file_name
-            logger.info(f"Document video by extension: {doc.file_id}, name: {doc.file_name}")
-        else:
-            await message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် (mp4, mkv, avi, mov, webm) ပို့ပေးပါ။")
-            return POST_TEXT_MOVIE
+    elif message.document and message.document.mime_type and message.document.mime_type.startswith('video/'):
+        file_obj = message.document
+        file_name = file_obj.file_name or "movie"
     else:
         await message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် ပို့ပေးပါ။")
         return POST_TEXT_MOVIE
@@ -281,13 +267,14 @@ async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- Standalone File Upload (Instant Deep Link) ----------
+# ---------- Standalone file upload -> Instant deep link (only when not in conversation) ----------
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
         return
+
+    # If user is in a conversation (context.user_data not empty), ignore
     if context.user_data:
-        # In a conversation, ignore
         return
 
     message = update.message
@@ -320,58 +307,11 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"ဤလင့်ခ်ကို နှိပ်သူတိုင်း (လိုအပ်သော Channel များဝင်ပြီးပါက) ဖိုင်ကို ရယူနိုင်ပါသည်။"
     )
 
-# ---------- Admin Commands (with Myanmar text and emojis) ----------
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    total_users = users_col.count_documents({})
-    total_req = get_total_requests()
-    await update.message.reply_text(
-        f"📊 **စာရင်းအင်း**\n\n👥 အသုံးပြုသူဦးရေ: {total_users}\n🎬 တောင်းဆိုမှုအရေအတွက်: {total_req}",
-        parse_mode="Markdown"
-    )
-
-async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    if not context.args:
-        await update.message.reply_text("📢 `/broadcast <မက်ဆေ့ချ်>` ပုံစံဖြင့် သုံးပါ။")
-        return
-    msg = ' '.join(context.args)
-    users = get_all_users()
-    count = 0
-    for uid in users:
-        try:
-            await context.bot.send_message(chat_id=uid, text=f"📢 {msg}")
-            count += 1
-        except:
-            pass
-    await update.message.reply_text(f"📢 ပြန်လွှင့်ခြင်း ပြီးဆုံးပါပြီ။ လက်ခံသူ {count} ဦး။")
-
-async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data:
-        await update.message.reply_text("❌ လက်ရှိ လုပ်ဆောင်နေသော လုပ်ငန်းစဉ် မရှိပါ။")
-        return
-    context.user_data.clear()
-    await update.message.reply_text("✅ လက်ရှိလုပ်ဆောင်နေသော လုပ်ငန်းစဉ်ကို ဖျက်သိမ်းလိုက်ပါသည်။")
-
-async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    if not context.args:
-        await update.message.reply_text("🗑️ `/delete <payload>` ပုံစံဖြင့် သုံးပါ။")
-        return
-    payload = context.args[0]
-    if delete_file_by_payload(payload):
-        await update.message.reply_text(f"✅ ဖိုင် `{payload}` ကို ဖျက်လိုက်ပါသည်။", parse_mode="Markdown")
-    else:
-        await update.message.reply_text(f"❌ ဖိုင် `{payload}` မတွေ့ပါ။", parse_mode="Markdown")
-
-# ---------- Start handler (Admin panel + user deep link) ----------
+# ---------- /start for admin panel and user deep link handler ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    # Admin: show panel (unless payload given)
+    # Admin: show panel (no deep link payload)
     if is_admin(user_id):
         if context.args:
             payload = context.args[0]
@@ -380,7 +320,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။")
                 return
             try:
-                # Send file to admin (same as user experience)
                 if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
                     sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
                 elif file_name.endswith(('.mp4', '.mkv', '.avi')):
@@ -418,8 +357,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except:
                         pass
                 asyncio.create_task(delete_files())
-                add_user(user_id)
-                increment_requests()
             except Exception as e:
                 await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
         else:
@@ -427,12 +364,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🎬 **အဒ်မင် ထိန်းချုပ်မှု ဘောင်သို့ ကြိုဆိုပါသည်။**\n\n"
                 "📤 မည်သည့်ဖိုင်ကိုမဆို ပို့ပေးလိုက်ပါက Deep Link ကို ချက်ချင်းရရှိမည်။\n\n"
                 "🛠️ **Command များ**\n"
-                "/post - ပုံနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
-                "/post_text - ပုံ၊ စာသားနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
-                "/stats - စာရင်းအင်းများ ကြည့်ရန်။\n"
-                "/broadcast <message> - အသုံးပြုသူအားလုံးသို့ စာပို့ရန်။\n"
-                "/cancel - လက်ရှိလုပ်ဆောင်နေသော လုပ်ငန်းစဉ်ကို ပယ်ဖျက်ရန်။\n"
-                "/delete <payload> - သိမ်းဆည်းထားသော ဖိုင်တစ်ခုကို ဖျက်ရန်။"
+                "🎬 `/post` - ပုံနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
+                "📝 `/post_text` - ပုံ၊ စာသားနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
+                "📊 `/stats` - စာရင်းအင်းများ ကြည့်ရန်။\n"
+                "📢 `/broadcast <message>` - အသုံးပြုသူအားလုံးသို့ စာပို့ရန်။\n"
+                "❌ `/cancel` - လက်ရှိလုပ်ဆောင်နေသော လုပ်ငန်းစဉ်ကို ပယ်ဖျက်ရန်။\n"
+                "🗑️ `/delete <payload>` - သိမ်းဆည်းထားသော ဖိုင်တစ်ခုကို ဖျက်ရန်။"
             )
         return
 
@@ -504,6 +441,51 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
 
+# ---------- Admin commands ----------
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    total_users = users_col.count_documents({})
+    total_req = get_total_requests()
+    await update.message.reply_text(f"📊 **စာရင်းအင်း**\n\n👥 အသုံးပြုသူဦးရေ: {total_users}\n🎬 တောင်းဆိုမှုအရေအတွက်: {total_req}", parse_mode="Markdown")
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("📢 /broadcast <message>")
+        return
+    msg = ' '.join(context.args)
+    users = get_all_users()
+    count = 0
+    for uid in users:
+        try:
+            await context.bot.send_message(chat_id=uid, text=msg)
+            count += 1
+        except:
+            pass
+    await update.message.reply_text(f"📢 ပြန်လွှင့်ခြင်း ပြီးဆုံးပါပြီ။ လက်ခံသူ {count} ဦး။")
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel any active conversation for the user"""
+    if not context.user_data:
+        await update.message.reply_text("လက်ရှိ လုပ်ဆောင်နေသော လုပ်ငန်းစဉ် မရှိပါ။")
+        return
+    context.user_data.clear()
+    await update.message.reply_text("✅ လက်ရှိလုပ်ဆောင်နေသော လုပ်ငန်းစဉ်ကို ဖျက်သိမ်းလိုက်ပါသည်။")
+
+async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("🗑️ အသုံးပြုပုံ: /delete <payload>")
+        return
+    payload = context.args[0]
+    if delete_file_by_payload(payload):
+        await update.message.reply_text(f"✅ ဖိုင် `{payload}` ကို ဖျက်လိုက်ပါသည်။", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"❌ ဖိုင် `{payload}` မတွေ့ပါ။", parse_mode="Markdown")
+
 # ---------- Webhook ----------
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 if not WEBHOOK_URL:
@@ -512,33 +494,26 @@ if not WEBHOOK_URL:
 
 telegram_app = Application.builder().token(TOKEN).build()
 
-# Add conversation handlers first (important order)
+# Order matters: conversation handlers first, then command handlers, then message handler
 telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post', post_start)],
-    states={
-        POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
-        POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_movie)],
-    },
+    states={POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
+            POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_movie)]},
     fallbacks=[CommandHandler('cancel', cancel_post)],
 ))
 telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post_text', post_text_start)],
-    states={
-        POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
-        POST_TEXT_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_text_caption)],
-        POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)],
-    },
+    states={POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
+            POST_TEXT_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_text_caption)],
+            POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)]},
     fallbacks=[CommandHandler('cancel', cancel_post_text)],
 ))
 
-# Add command handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("stats", stats_command))
 telegram_app.add_handler(CommandHandler("broadcast", broadcast_command))
 telegram_app.add_handler(CommandHandler("cancel", cancel_command))
 telegram_app.add_handler(CommandHandler("delete", delete_command))
-
-# Standalone file upload must be after conversations to avoid stealing messages
 telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
 
 @app.route('/webhook', methods=['POST'])
