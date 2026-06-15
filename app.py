@@ -3,6 +3,7 @@ import asyncio
 import threading
 import logging
 import secrets
+import sys
 from datetime import datetime
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -25,7 +26,7 @@ try:
     mongo_client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
     mongo_client.admin.command('ping')
     logger.info("MongoDB connected")
-except Exception as e:
+except:
     logger.warning("SSL error, retrying with tlsAllowInvalidCertificates")
     mongo_client = MongoClient(MONGO_URI, tlsAllowInvalidCertificates=True, serverSelectionTimeoutMS=5000)
 
@@ -71,10 +72,12 @@ async def is_member_of_channel(user_id, channel_id, bot):
         return False
 
 async def check_all_channels(user_id, bot):
+    """Return (all_joined, missing_channels_list)"""
+    missing = []
     for ch in REQUIRED_CHANNELS:
         if not await is_member_of_channel(user_id, ch["id"], bot):
-            return False, ch
-    return True, None
+            missing.append(ch)
+    return len(missing) == 0, missing
 
 # ---------- Admin: file upload → Deep Link ----------
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -111,12 +114,14 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"🔗 **Your Deep Link is ready!**\n\n"
         f"**File:** `{file_name}`\n"
         f"**Link:**\n{deep_link}\n\n"
-        f"Anyone who clicks this link will get the file after joining required channels."
+        f"Anyone who clicks this link will get the file (after joining required channels)."
     )
 
-# ---------- Deep link handler for users ----------
+# ---------- Deep link handler for users (Admin bypass included) ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+
+    # If no payload, show welcome message
     if not context.args:
         await update.message.reply_text(
             "🎬 **File to Deep Link Bot**\n\n"
@@ -132,32 +137,81 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Invalid or expired link.")
         return
 
-    # Check channel membership
-    ok, missing_ch = await check_all_channels(user_id, context.bot)
+    # ========== ADMIN BYPASS ==========
+    if is_admin(user_id):
+        # Admin: skip channel check and immediately send file with warning+buttons
+        try:
+            # Send file based on type
+            if file_name.lower().endswith(('.jpg', '.jpeg', '.png', '.gif')):
+                sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
+            elif file_name.lower().endswith(('.mp4', '.mkv', '.avi')):
+                sent_msg = await context.bot.send_video(chat_id=user_id, video=file_id, caption=f"📂 {file_name}")
+            else:
+                sent_msg = await context.bot.send_document(chat_id=user_id, document=file_id, filename=file_name)
+
+            warning_text = (
+                "⚠️ ⚠️ ⚠️ **အရေးကြီးပါတယ်** ⚠️ ⚠️ ⚠️\n\n"
+                "ဤရုပ်ရှင်ဖိုင်များ/ဗီဒီယိုများကို 5 မိနစ်အတွင်း (မူပိုင်ခွင့်ပြဿနာများကြောင့်) ဖျက်ပါမည်။\n\n"
+                "ကျေးဇူးပြု၍ ဤဖိုင်များ/ဗီဒီယိုများအားလုံးကို သင်၏ Saved Messages များသို့ Forward လုပ်ပြီး ထိုနေရာတွင် ဇာတ်ကားအား ကြည့်ရှုပါ။\n\n"
+                "ကျွန်ုပ်၏ Channel ကို လာရောက်အားပေးမှုအတွက် ကျေးဇူးအထူးတင်ပါတယ် 🙏🙏🙏\n\n"
+                "Channel ရေရှည်တည်တံ့ဖို့အတွက် Support ပေးချင်ပါက Wave Pay (09767011991) ကို ကူညီနိုင်ပါတယ်။\n\n"
+                "အားလုံးကို ကျေးဇူးတင်ပါတယ်။\n\n"
+                "!!! IMPORTANT !!!\n"
+                "This Movie Files/Videos will be deleted in 5 mins (Due to Copyright Issues).\n"
+                "Please forward these ALL Files/Videos to your Saved Messages and start downloading there."
+            )
+            keyboard = [
+                [InlineKeyboardButton("🎬 Movie Channel", url="https://t.me/moviesandseriesforallwzn")],
+                [InlineKeyboardButton("🔞 Adult Channel", url="https://t.me/everyboyhobby")],
+                [InlineKeyboardButton("🎵 Music Channel", url="https://t.me/wznmusiclibary")],
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text, reply_markup=reply_markup, parse_mode="Markdown")
+
+            # Schedule deletion after 5 minutes
+            async def delete_files():
+                await asyncio.sleep(300)
+                try:
+                    await context.bot.delete_message(chat_id=user_id, message_id=sent_msg.message_id)
+                except:
+                    pass
+                try:
+                    await context.bot.delete_message(chat_id=user_id, message_id=warn_msg.message_id)
+                except:
+                    pass
+            asyncio.create_task(delete_files())
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error sending file: {e}")
+        return
+    # ========== END ADMIN BYPASS ==========
+
+    # Normal user: check channel membership
+    ok, missing_channels = await check_all_channels(user_id, context.bot)
     if not ok:
         msg = "🎬 **ဖိုင်ရယူရန် အောက်ပါ Channel များအားလုံးကို ဝင်ထားပါ။**\n\n"
         for ch in REQUIRED_CHANNELS:
-            status = "❌" if ch["id"] == missing_ch["id"] else "✅"
+            # Mark missing channels with ❌, joined with ✅
+            is_missing = any(mc["id"] == ch["id"] for mc in missing_channels)
+            status = "❌" if is_missing else "✅"
             msg += f"{status} {ch['name']}: [ဝင်ရန်]({ch['invite']})\n"
         await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
         return
 
-    # Send the file
+    # User has joined all channels – send file with warning+buttons
     try:
-        if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
+        if file_name.lower().endswith(('.jpg', '.jpeg', '.png', '.gif')):
             sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
-        elif file_name.endswith(('.mp4', '.mkv', '.avi')):
+        elif file_name.lower().endswith(('.mp4', '.mkv', '.avi')):
             sent_msg = await context.bot.send_video(chat_id=user_id, video=file_id, caption=f"📂 {file_name}")
         else:
             sent_msg = await context.bot.send_document(chat_id=user_id, document=file_id, filename=file_name)
 
-        # ==== FULL WARNING MESSAGE (Burmese + English + Wave Pay) ====
         warning_text = (
             "⚠️ ⚠️ ⚠️ **အရေးကြီးပါတယ်** ⚠️ ⚠️ ⚠️\n\n"
             "ဤရုပ်ရှင်ဖိုင်များ/ဗီဒီယိုများကို 5 မိနစ်အတွင်း (မူပိုင်ခွင့်ပြဿနာများကြောင့်) ဖျက်ပါမည်။\n\n"
-            "ကျေးဇူးပြု၍ ဤဖိုင်များ/ဗီဒီယိုများအားလုံးကို သင်၏ **Saved Messages** များသို့ Forward လုပ်ပြီး ထိုနေရာတွင် ဇာတ်ကားအား ကြည့်ရှုပါ။\n\n"
+            "ကျေးဇူးပြု၍ ဤဖိုင်များ/ဗီဒီယိုများအားလုံးကို သင်၏ Saved Messages များသို့ Forward လုပ်ပြီး ထိုနေရာတွင် ဇာတ်ကားအား ကြည့်ရှုပါ။\n\n"
             "ကျွန်ုပ်၏ Channel ကို လာရောက်အားပေးမှုအတွက် ကျေးဇူးအထူးတင်ပါတယ် 🙏🙏🙏\n\n"
-            "Channel ရေရှည်တည်တံ့ဖို့အတွက် Support ပေးချင်ပါက **Wave Pay (09767011991)** ကို ကူညီနိုင်ပါတယ်။\n\n"
+            "Channel ရေရှည်တည်တံ့ဖို့အတွက် Support ပေးချင်ပါက Wave Pay (09767011991) ကို ကူညီနိုင်ပါတယ်။\n\n"
             "အားလုံးကို ကျေးဇူးတင်ပါတယ်။\n\n"
             "!!! IMPORTANT !!!\n"
             "This Movie Files/Videos will be deleted in 5 mins (Due to Copyright Issues).\n"
@@ -171,7 +225,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-        # Schedule deletion after 5 minutes (300 seconds)
         async def delete_files():
             await asyncio.sleep(300)
             try:
@@ -182,7 +235,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.delete_message(chat_id=user_id, message_id=warn_msg.message_id)
             except:
                 pass
-
         asyncio.create_task(delete_files())
     except Exception as e:
         await update.message.reply_text(f"❌ Error sending file: {e}")
@@ -217,7 +269,6 @@ async def set_webhook():
     logger.info(f"Webhook set to {WEBHOOK_URL}")
 
 if __name__ == "__main__":
-    import sys
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(telegram_app.initialize())
