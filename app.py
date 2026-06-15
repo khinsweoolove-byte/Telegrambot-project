@@ -5,39 +5,49 @@ import logging
 import secrets
 from flask import Flask, request
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, filters, CommandHandler, ContextTypes
 from telegram.helpers import create_deep_linked_url
 from pymongo import MongoClient
 
-# ---------- Logging ----------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ---------- Flask ----------
 app = Flask(__name__)
 
 # ---------- MongoDB ----------
 MONGO_URI = os.environ.get("MONGO_URI")
 if not MONGO_URI:
-    logger.error("MONGO_URI not set")
-    exit(1)
+    logger.error("MONGO_URI environment variable not set!")
+    # For testing without MongoDB, you can use in-memory dict (not recommended for production)
+    # But we'll keep MongoDB as required
+    file_store = {}
+else:
+    mongo_client = MongoClient(MONGO_URI)
+    db = mongo_client["file_share_bot"]
+    file_collection = db["files"]
 
-mongo_client = MongoClient(MONGO_URI)
-db = mongo_client["file_share_bot"]
-file_collection = db["files"]
-
-def save_file(payload, file_id, file_name):
-    file_collection.update_one(
-        {"payload": payload},
-        {"$set": {"file_id": file_id, "file_name": file_name}},
-        upsert=True
-    )
+def save_file(payload, file_id, file_name, file_type):
+    if MONGO_URI:
+        file_collection.update_one(
+            {"payload": payload},
+            {"$set": {"file_id": file_id, "file_name": file_name, "file_type": file_type}},
+            upsert=True
+        )
+    else:
+        file_store[payload] = {"file_id": file_id, "file_name": file_name, "file_type": file_type}
+    logger.info(f"Saved: {payload} -> {file_name}")
 
 def get_file(payload):
-    doc = file_collection.find_one({"payload": payload})
-    if doc:
-        return doc["file_id"], doc["file_name"]
-    return None, None
+    if MONGO_URI:
+        doc = file_collection.find_one({"payload": payload})
+        if doc:
+            return doc["file_id"], doc["file_name"], doc.get("file_type", "document")
+        return None, None, None
+    else:
+        data = file_store.get(payload)
+        if data:
+            return data["file_id"], data["file_name"], data.get("file_type", "document")
+        return None, None, None
 
 # ---------- Telegram Config ----------
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -51,69 +61,84 @@ def generate_payload():
 
 # ---------- Handlers ----------
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """User က ဖိုင်ပို့လိုက်တိုင်း Deep Link ထုတ်ပေးမယ်"""
     message = update.message
     file_obj = None
     file_name = "file"
-
+    file_type = "document"
+    
     if message.document:
         file_obj = message.document
         file_name = file_obj.file_name or "document"
+        file_type = "document"
+        logger.info(f"Received document: {file_name}")
     elif message.video:
         file_obj = message.video
-        file_name = file_obj.file_name or "video"
+        file_name = file_obj.file_name or "video.mp4"
+        file_type = "video"
+        logger.info(f"Received video: {file_name}")
     elif message.photo:
         file_obj = message.photo[-1]
         file_name = "photo.jpg"
+        file_type = "photo"
+        logger.info(f"Received photo")
     elif message.audio:
         file_obj = message.audio
-        file_name = file_obj.file_name or "audio"
+        file_name = file_obj.file_name or "audio.mp3"
+        file_type = "audio"
+        logger.info(f"Received audio: {file_name}")
     else:
-        await message.reply_text("ကျေးဇူးပြု၍ ဖိုင် (document, video, photo, audio) တစ်ခု ပို့ပါ။")
+        await message.reply_text("Please send a file (document, video, photo, or audio).")
         return
-
-    # Save file info and generate deep link
+    
     payload = generate_payload()
-    save_file(payload, file_obj.file_id, file_name)
+    save_file(payload, file_obj.file_id, file_name, file_type)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
     
     await message.reply_text(
-        f"✅ **သင်၏ Deep Link အသင့်ရှိပါပြီ။**\n\n"
-        f"**ဖိုင်အမည်:** `{file_name}`\n"
-        f"**လင့် (link):**\n{deep_link}\n\n"
-        f"ဤလင့်ကို နှိပ်လိုက်ရုံဖြင့် ဖိုင်ကို ရယူနိုင်ပါသည်။"
+        f"🔗 **Your Deep Link is ready!**\n\n"
+        f"**File name:** `{file_name}`\n"
+        f"**Link:**\n{deep_link}\n\n"
+        f"Anyone who clicks this link will receive the file immediately."
     )
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     if context.args:
         payload = context.args[0]
-        file_id, file_name = get_file(payload)
+        file_id, file_name, file_type = get_file(payload)
         if not file_id:
-            await update.message.reply_text("❌ လင့်မမှန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။")
+            await update.message.reply_text("❌ Invalid or expired link.")
             return
-        await update.message.reply_text(f"📂 **{file_name}** ပို့နေပါပြီ...")
-        if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
-            await context.bot.send_photo(chat_id=update.effective_user.id, photo=file_id, caption=file_name)
-        elif file_name.endswith(('.mp4', '.mkv', '.avi')):
-            await context.bot.send_video(chat_id=update.effective_user.id, video=file_id, caption=file_name)
-        else:
-            await context.bot.send_document(chat_id=update.effective_user.id, document=file_id, filename=file_name)
+        await update.message.reply_text(f"📂 Sending **{file_name}**...")
+        try:
+            if file_type == "photo":
+                await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=file_name)
+            elif file_type == "video":
+                await context.bot.send_video(chat_id=user_id, video=file_id, caption=file_name)
+            elif file_type == "audio":
+                await context.bot.send_audio(chat_id=user_id, audio=file_id, caption=file_name)
+            else:
+                await context.bot.send_document(chat_id=user_id, document=file_id, filename=file_name)
+        except Exception as e:
+            await update.message.reply_text(f"Error sending file: {e}")
         return
     await update.message.reply_text(
         "🎯 **File to Deep Link Bot**\n\n"
-        "သင်ပို့လိုက်တဲ့ ဖိုင်တိုင်းအတွက် Deep Link ကို ကျွန်တော် ချက်ချင်းထုတ်ပေးပါမယ်။\n"
-        "အဲဒီလင့်ကို သင်ဖြစ်စေ၊ တစ်ခြားသူများ ဖြစ်စေ နှိပ်လိုက်ရုံနဲ့ ဖိုင်ကို ရယူနိုင်ပါပြီ။"
+        "Send me any file (document, video, photo, audio) and I will instantly give you a deep link.\n"
+        "Clicking that link will deliver the file to anyone."
     )
 
-# ---------- Webhook Setup ----------
+# ---------- Webhook ----------
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 if not WEBHOOK_URL:
-    logger.error("WEBHOOK_URL not set")
+    logger.error("WEBHOOK_URL environment variable not set!")
     exit(1)
 
 telegram_app = Application.builder().token(TOKEN).build()
-telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file))
-telegram_app.add_handler(MessageHandler(filters.COMMAND, start))
+# Order matters: put file handler first because it has more specific filters
+telegram_app.add_handler(MessageHandler(filters.Document.ALL | filters.VIDEO | filters.PHOTO | filters.AUDIO, handle_file))
+telegram_app.add_handler(CommandHandler("start", start))
+# Also catch any non-command text that might be a direct file? Already handled above.
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
