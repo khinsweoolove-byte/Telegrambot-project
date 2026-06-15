@@ -121,6 +121,17 @@ async def check_all_channels(user_id, bot):
             return False, ch
     return True, None
 
+# ---------- Auto-delete helper (reliable) ----------
+async def delete_messages_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_ids: list, delay_seconds: int = 300):
+    """Delete given messages after specified delay"""
+    await asyncio.sleep(delay_seconds)
+    for msg_id in message_ids:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            logger.info(f"Auto-deleted message {msg_id} in chat {chat_id}")
+        except Exception as e:
+            logger.warning(f"Failed to delete message {msg_id}: {e}")
+
 # ---------- Conversation states ----------
 POST_PHOTO, POST_MOVIE = range(2)
 POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
@@ -396,11 +407,10 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_delete":
         await query.edit_message_text("🗑️ `/delete <payload>` - သိမ်းဆည်းထားသော ဖိုင်တစ်ခုကို ဖျက်ရန်။")
 
-# ---------- Start handler (Admin panel with buttons) ----------
+# ---------- Start handler (Admin panel with buttons + User deep link) ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    # Admin: show button menu
     if is_admin(user_id):
         if context.args:
             payload = context.args[0]
@@ -435,21 +445,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-                async def delete_files():
-                    await asyncio.sleep(300)
-                    try:
-                        await context.bot.delete_message(chat_id=user_id, message_id=sent_msg.message_id)
-                    except:
-                        pass
-                    try:
-                        await context.bot.delete_message(chat_id=user_id, message_id=warn_msg.message_id)
-                    except:
-                        pass
-                asyncio.create_task(delete_files())
+                # Schedule deletion of both messages after 5 minutes (300 seconds)
+                asyncio.create_task(
+                    delete_messages_after_delay(
+                        context,
+                        chat_id=user_id,
+                        message_ids=[sent_msg.message_id, warn_msg.message_id],
+                        delay_seconds=300
+                    )
+                )
             except Exception as e:
                 await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
         else:
-            # Show button menu for admin
             await admin_menu(update, context)
         return
 
@@ -505,17 +512,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-        async def delete_files():
-            await asyncio.sleep(300)
-            try:
-                await context.bot.delete_message(chat_id=user_id, message_id=sent_msg.message_id)
-            except:
-                pass
-            try:
-                await context.bot.delete_message(chat_id=user_id, message_id=warn_msg.message_id)
-            except:
-                pass
-        asyncio.create_task(delete_files())
+        # Schedule deletion of both messages after 5 minutes (300 seconds)
+        asyncio.create_task(
+            delete_messages_after_delay(
+                context,
+                chat_id=user_id,
+                message_ids=[sent_msg.message_id, warn_msg.message_id],
+                delay_seconds=300
+            )
+        )
         add_user(user_id)
         increment_requests()
     except Exception as e:
@@ -550,7 +555,7 @@ telegram_app.add_handler(CommandHandler("stats", stats_command))
 telegram_app.add_handler(CommandHandler("broadcast", broadcast_command))
 telegram_app.add_handler(CommandHandler("cancel", cancel_command))
 telegram_app.add_handler(CommandHandler("delete", delete_command))
-telegram_app.add_handler(CommandHandler("menu", admin_menu))  # /menu command also shows button menu
+telegram_app.add_handler(CommandHandler("menu", admin_menu))
 telegram_app.add_handler(CallbackQueryHandler(menu_callback, pattern="cmd_"))
 
 # File upload handler (must be last)
