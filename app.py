@@ -8,7 +8,7 @@ from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters, ContextTypes,
-    ConversationHandler
+    ConversationHandler, CallbackQueryHandler
 )
 from telegram.helpers import create_deep_linked_url
 from pymongo import MongoClient
@@ -303,10 +303,104 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"ဤလင့်ခ်ကို နှိပ်သူတိုင်း (လိုအပ်သော Channel များဝင်ပြီးပါက) ဖိုင်ကို ရယူနိုင်ပါသည်။"
     )
 
-# ---------- /start (Admin Panel + User) ----------
+# ---------- Admin commands ----------
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    total_users = users_col.count_documents({})
+    total_req = get_total_requests()
+    await update.message.reply_text(f"📊 **စာရင်းအင်း**\n\n👥 အသုံးပြုသူဦးရေ: {total_users}\n🎬 တောင်းဆိုမှုအရေအတွက်: {total_req}", parse_mode="Markdown")
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("📢 `/broadcast <message>` - အသုံးပြုသူအားလုံးသို့ စာပို့ရန်။")
+        return
+    msg = ' '.join(context.args)
+    users = get_all_users()
+    count = 0
+    for uid in users:
+        try:
+            await context.bot.send_message(chat_id=uid, text=msg)
+            count += 1
+        except:
+            pass
+    await update.message.reply_text(f"📢 ပြန်လွှင့်ခြင်း ပြီးဆုံးပါပြီ။ လက်ခံသူ {count} ဦး။")
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.user_data:
+        await update.message.reply_text("❌ လက်ရှိ လုပ်ဆောင်နေသော လုပ်ငန်းစဉ် မရှိပါ။")
+        return
+    context.user_data.clear()
+    await update.message.reply_text("✅ လက်ရှိလုပ်ဆောင်နေသော လုပ်ငန်းစဉ်ကို ဖျက်သိမ်းလိုက်ပါသည်။")
+
+async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        return
+    if not context.args:
+        await update.message.reply_text("🗑️ `/delete <payload>` - သိမ်းဆည်းထားသော ဖိုင်တစ်ခုကို ဖျက်ရန်။")
+        return
+    payload = context.args[0]
+    if delete_file_by_payload(payload):
+        await update.message.reply_text(f"✅ ဖိုင် `{payload}` ကို ဖျက်လိုက်ပါသည်။", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"❌ ဖိုင် `{payload}` မတွေ့ပါ။", parse_mode="Markdown")
+
+# ========== ADMIN MENU WITH BUTTONS ==========
+async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if not is_admin(user_id):
+        await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("🎬 Post ဖန်တီးရန်", callback_data="cmd_post")],
+        [InlineKeyboardButton("📝 Post_Text ဖန်တီးရန်", callback_data="cmd_post_text")],
+        [InlineKeyboardButton("📊 စာရင်းအင်းကြည့်ရန်", callback_data="cmd_stats")],
+        [InlineKeyboardButton("📢 Broadcast ပို့ရန်", callback_data="cmd_broadcast")],
+        [InlineKeyboardButton("❌ Cancel လုပ်ရန်", callback_data="cmd_cancel")],
+        [InlineKeyboardButton("🗑️ ဖိုင်ဖျက်ရန်", callback_data="cmd_delete")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        "🎬 **ADMIN ထိန်းချုပ်မှု PANEL**\n\n"
+        "အောက်ပါခလုတ်များမှ သင်လိုချင်သော လုပ်ဆောင်ချက်ကို ရွေးချယ်ပါ။",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
+
+async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    if not is_admin(user_id):
+        await query.edit_message_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
+        return
+
+    data = query.data
+    if data == "cmd_post":
+        await query.edit_message_text("🎬 /post command ကို ရိုက်ထည့်ပါ။")
+        await post_start(update, context)
+    elif data == "cmd_post_text":
+        await query.edit_message_text("📝 /post_text command ကို ရိုက်ထည့်ပါ။")
+        await post_text_start(update, context)
+    elif data == "cmd_stats":
+        await query.edit_message_text("📊 /stats command ကို ရိုက်ထည့်ပါ။")
+        await stats_command(update, context)
+    elif data == "cmd_broadcast":
+        await query.edit_message_text("📢 `/broadcast <message>` - အသုံးပြုသူအားလုံးသို့ စာပို့ရန်။")
+    elif data == "cmd_cancel":
+        await query.edit_message_text("❌ /cancel command ကို ရိုက်ထည့်ပါ။")
+        await cancel_command(update, context)
+    elif data == "cmd_delete":
+        await query.edit_message_text("🗑️ `/delete <payload>` - သိမ်းဆည်းထားသော ဖိုင်တစ်ခုကို ဖျက်ရန်။")
+
+# ---------- Start handler (Admin panel with buttons) ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
+    # Admin: show button menu
     if is_admin(user_id):
         if context.args:
             payload = context.args[0]
@@ -355,19 +449,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
         else:
-            # Admin Panel with emojis as requested
-            await update.message.reply_text(
-                "🎬 **ADMIN ထိန်းချုပ်မှု PANEL မှ ကြိုဆိုပါသည်။**\n\n"
-                "📤 မည်သည့်ဖိုင်ကိုမဆို ပို့ပေးလိုက်ပါက Deep Link ကို ချက်ချင်းရရှိမည်။\n\n"
-                "🛠️ **Command များ**\n"
-                "🤖 `/start` - Bot ကိုစတင်ရန်။\n"
-                "🎬 `/post` - ပုံနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
-                "📝 `/post_text` - ပုံ၊ စာသားနှင့် ဗီဒီယိုဖိုင်ဖြင့် ရုပ်ရှင်ပိုစတာ ဖန်တီးရန်။\n"
-                "📊 `/stats` - စာရင်းအင်းများ ကြည့်ရန်။\n"
-                "📢 `/broadcast <message>` - အသုံးပြုသူအားလုံးသို့ စာပို့ရန်။\n"
-                "❌ `/cancel` - လက်ရှိလုပ်ဆောင်နေသော လုပ်ငန်းစဉ်ကို ပယ်ဖျက်ရန်။\n"
-                "🗑️ `/delete <payload>` - သိမ်းဆည်းထားသော ဖိုင်တစ်ခုကို ဖျက်ရန်။"
-            )
+            # Show button menu for admin
+            await admin_menu(update, context)
         return
 
     # Non-admin users
@@ -438,50 +521,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
 
-# ---------- Admin commands ----------
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    total_users = users_col.count_documents({})
-    total_req = get_total_requests()
-    await update.message.reply_text(f"📊 **စာရင်းအင်း**\n\n👥 အသုံးပြုသူဦးရေ: {total_users}\n🎬 တောင်းဆိုမှုအရေအတွက်: {total_req}", parse_mode="Markdown")
-
-async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    if not context.args:
-        await update.message.reply_text("📢 `/broadcast <message>` - အသုံးပြုသူအားလုံးသို့ စာပို့ရန်။")
-        return
-    msg = ' '.join(context.args)
-    users = get_all_users()
-    count = 0
-    for uid in users:
-        try:
-            await context.bot.send_message(chat_id=uid, text=msg)
-            count += 1
-        except:
-            pass
-    await update.message.reply_text(f"📢 ပြန်လွှင့်ခြင်း ပြီးဆုံးပါပြီ။ လက်ခံသူ {count} ဦး။")
-
-async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data:
-        await update.message.reply_text("❌ လက်ရှိ လုပ်ဆောင်နေသော လုပ်ငန်းစဉ် မရှိပါ။")
-        return
-    context.user_data.clear()
-    await update.message.reply_text("✅ လက်ရှိလုပ်ဆောင်နေသော လုပ်ငန်းစဉ်ကို ဖျက်သိမ်းလိုက်ပါသည်။")
-
-async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-    if not context.args:
-        await update.message.reply_text("🗑️ `/delete <payload>` - သိမ်းဆည်းထားသော ဖိုင်တစ်ခုကို ဖျက်ရန်။")
-        return
-    payload = context.args[0]
-    if delete_file_by_payload(payload):
-        await update.message.reply_text(f"✅ ဖိုင် `{payload}` ကို ဖျက်လိုက်ပါသည်။", parse_mode="Markdown")
-    else:
-        await update.message.reply_text(f"❌ ဖိုင် `{payload}` မတွေ့ပါ။", parse_mode="Markdown")
-
 # ---------- Webhook ----------
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 if not WEBHOOK_URL:
@@ -505,11 +544,16 @@ telegram_app.add_handler(ConversationHandler(
     fallbacks=[CommandHandler('cancel', cancel_post_text)],
 ))
 
+# Command handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("stats", stats_command))
 telegram_app.add_handler(CommandHandler("broadcast", broadcast_command))
 telegram_app.add_handler(CommandHandler("cancel", cancel_command))
 telegram_app.add_handler(CommandHandler("delete", delete_command))
+telegram_app.add_handler(CommandHandler("menu", admin_menu))  # /menu command also shows button menu
+telegram_app.add_handler(CallbackQueryHandler(menu_callback, pattern="cmd_"))
+
+# File upload handler (must be last)
 telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
 
 @app.route('/webhook', methods=['POST'])
