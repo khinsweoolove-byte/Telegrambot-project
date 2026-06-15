@@ -121,7 +121,7 @@ async def check_all_channels(user_id, bot):
             return False, ch
     return True, None
 
-# ---------- Auto-delete helper (reliable) ----------
+# ---------- Auto-delete helper ----------
 async def delete_messages_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_ids: list, delay_seconds: int = 300):
     """Delete given messages after specified delay"""
     await asyncio.sleep(delay_seconds)
@@ -132,9 +132,9 @@ async def delete_messages_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_i
         except Exception as e:
             logger.warning(f"Failed to delete message {msg_id}: {e}")
 
-# ---------- Conversation states ----------
-POST_PHOTO, POST_MOVIE = range(2)
-POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
+# ---------- Conversation states (fixed - separate ranges) ----------
+POST_PHOTO, POST_MOVIE = range(1, 3)           # states for /post
+POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)  # states for /post_text
 
 # ---------- /post conversation ----------
 async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -191,7 +191,7 @@ async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- /post_text conversation ----------
+# ---------- /post_text conversation (fixed) ----------
 async def post_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
@@ -407,7 +407,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_delete":
         await query.edit_message_text("🗑️ `/delete <payload>` - သိမ်းဆည်းထားသော ဖိုင်တစ်ခုကို ဖျက်ရန်။")
 
-# ---------- Start handler (Admin panel with buttons + User deep link) ----------
+# ---------- Start handler ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
@@ -445,7 +445,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-                # Schedule deletion of both messages after 5 minutes (300 seconds)
                 asyncio.create_task(
                     delete_messages_after_delay(
                         context,
@@ -512,7 +511,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup(keyboard)
         warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text, reply_markup=reply_markup, parse_mode="Markdown")
 
-        # Schedule deletion of both messages after 5 minutes (300 seconds)
         asyncio.create_task(
             delete_messages_after_delay(
                 context,
@@ -534,19 +532,24 @@ if not WEBHOOK_URL:
 
 telegram_app = Application.builder().token(TOKEN).build()
 
-# Conversation handlers
-telegram_app.add_handler(ConversationHandler(
-    entry_points=[CommandHandler('post', post_start)],
-    states={POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
-            POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_movie)]},
-    fallbacks=[CommandHandler('cancel', cancel_post)],
-))
+# Conversation handlers (order matters - more specific first)
 telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post_text', post_text_start)],
-    states={POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
-            POST_TEXT_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_text_caption)],
-            POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)]},
+    states={
+        POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
+        POST_TEXT_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_text_caption)],
+        POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)],
+    },
     fallbacks=[CommandHandler('cancel', cancel_post_text)],
+))
+
+telegram_app.add_handler(ConversationHandler(
+    entry_points=[CommandHandler('post', post_start)],
+    states={
+        POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
+        POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_movie)],
+    },
+    fallbacks=[CommandHandler('cancel', cancel_post)],
 ))
 
 # Command handlers
