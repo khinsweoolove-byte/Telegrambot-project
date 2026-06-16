@@ -334,13 +334,16 @@ async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- Standalone file upload -> Deep Link ----------
+# ---------- Standalone file upload -> Deep Link (for any file, not in conversation) ----------
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
         return
-    if context.user_data:
+    
+    # If there is an active conversation (e.g., /post or /post_text), ignore this handler
+    if context.user_data and context.user_data.get('waiting_for_photos', False):
         return
+    
     message = update.message
     file_obj = None
     file_name = "file"
@@ -358,10 +361,17 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
         file_name = file_obj.file_name or "audio"
     else:
         return
+    
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
-    await message.reply_text(f"🔗 **သင်၏ Deep Link အဆင်သင့်ဖြစ်ပါပြီ။**\n\n{deep_link}\n\n`{file_name}`", parse_mode="Markdown")
+    await message.reply_text(
+        f"🔗 **သင်၏ Deep Link အဆင်သင့်ဖြစ်ပါပြီ။**\n\n"
+        f"{deep_link}\n\n"
+        f"`{file_name}`\n\n"
+        f"ဤလင့်ကို နှိပ်သူတိုင်း (Channel 4 ခုလုံးဝင်ပြီးပါက) ဖိုင်ရယူနိုင်ပါသည်။",
+        parse_mode="Markdown"
+    )
 
 # ---------- Admin commands ----------
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
