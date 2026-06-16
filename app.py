@@ -141,76 +141,66 @@ def escape_markdown(text: str) -> str:
 POST_PHOTO, POST_MOVIE = range(2)
 POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
 
-# ---------- /post with time-based auto-advance ----------
+# Timer for auto-advance after last photo
+async def start_photo_timer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Start a timer that will advance to movie step if no more photos arrive within 5 seconds"""
+    user_id = update.effective_user.id
+    # Cancel any existing timer for this user
+    if 'photo_timer' in context.user_data:
+        context.user_data['photo_timer'].cancel()
+    
+    async def timer_callback():
+        await asyncio.sleep(5)
+        # Check if still waiting for photos
+        if context.user_data.get('waiting_for_photos') and context.user_data.get('photos'):
+            context.user_data['waiting_for_photos'] = False
+            await context.bot.send_message(chat_id=user_id, text="🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
+            # Move conversation state to POST_MOVIE manually
+            context.user_data['step'] = 'waiting_for_movie'
+            # We need to update the conversation state by returning POST_MOVIE
+            # This is tricky because we're not in a handler. We'll set a flag.
+            context.user_data['force_next_step'] = True
+    
+    task = asyncio.create_task(timer_callback())
+    context.user_data['photo_timer'] = task
+
+# ---------- /post (multiple photos, auto-detect after 5 sec idle) ----------
 async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံများကို စတင်ပို့ပါ။ ပုံအားလုံးပို့ပြီးပါက စက္ကန့်အနည်းငယ်ကြာပါက အလိုအလျောက် နောက်အဆင့်သို့ ရောက်သွားပါမည်။")
+    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံများကို စတင်ပို့ပါ။ (ပုံအားလုံးပို့ပြီးပါက 5 စက္ကန့်အကြာတွင် အလိုအလျောက် Video တောင်းပေးပါမည်)")
     context.user_data['photos'] = []
-    context.user_data['timer_task'] = None
+    context.user_data['waiting_for_photos'] = True
+    context.user_data['step'] = 'waiting_for_photos'
     return POST_PHOTO
 
-async def reset_timer(context: ContextTypes.DEFAULT_TYPE, user_data: dict, chat_id: int, message_id: int):
-    # Cancel existing timer if any
-    if user_data.get('timer_task'):
-        user_data['timer_task'].cancel()
-    # Create new timer task
-    async def timer_callback():
-        await asyncio.sleep(10)  # 10 seconds timeout (adjustable)
-        # If still waiting for photos, automatically proceed
-        if user_data.get('waiting_for_photos'):
-            if user_data.get('photos'):
-                # Move to next step
-                user_data['waiting_for_photos'] = False
-                await context.bot.send_message(chat_id=chat_id, text="🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
-                # We need to move conversation state to POST_MOVIE manually
-                # But we can't directly change state here, so we'll use a workaround:
-                # Set a flag and let the next message handler know.
-                user_data['auto_advance'] = True
-            else:
-                await context.bot.send_message(chat_id=chat_id, text="❌ အနည်းဆုံး ပုံတစ်ပုံ ပို့ပေးရပါမည်။")
-    task = asyncio.create_task(timer_callback())
-    user_data['timer_task'] = task
-
 async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_data = context.user_data
-    # If auto_advance flag is set, we are already expecting video
-    if user_data.get('auto_advance'):
-        # This means the timer already triggered and we are now in video waiting state
-        # But this function might be called if user sends another photo after timeout.
-        # To avoid confusion, we'll ignore extra photos after timeout.
-        await update.message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် ပို့ပေးပါ။")
-        return POST_MOVIE
-
-    if not user_data.get('waiting_for_photos', True):
-        # Already moved on, ignore extra photos
+    # If we are already in movie waiting step, ignore
+    if not context.user_data.get('waiting_for_photos'):
+        # Maybe already advanced? Let the next handler handle it
         return POST_PHOTO
-
-    # If it's a text message (for manual advance)
-    if update.message.text and update.message.text.strip() == "ပြီးပါပြီ":
-        if not user_data.get('photos'):
-            await update.message.reply_text("အနည်းဆုံး ပုံတစ်ပုံ ပို့ပေးရပါမည်။")
-            return POST_PHOTO
-        # Cancel timer if any
-        if user_data.get('timer_task'):
-            user_data['timer_task'].cancel()
-        user_data['waiting_for_photos'] = False
-        await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
-        return POST_MOVIE
-
+    
     if not update.message.photo:
-        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။ ပုံအားလုံးပို့ပြီးပါက စက္ကန့်အနည်းငယ်ကြာပါက အလိုအလျောက် နောက်အဆင့်သို့ ရောက်သွားပါမည်။")
+        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_PHOTO
-
+    
     # Add photo
-    user_data['photos'].append(update.message.photo[-1].file_id)
-    # Capture caption only from first photo
-    if update.message.caption and len(user_data.get('photos', [])) == 1:
-        user_data['custom_caption'] = update.message.caption
-    await update.message.reply_text(f"✅ ပုံ #{len(user_data['photos'])} လက်ခံရရှိပါပြီ။")
+    context.user_data['photos'].append(update.message.photo[-1].file_id)
+    if update.message.caption and len(context.user_data.get('photos', [])) == 1:
+        context.user_data['custom_caption'] = update.message.caption
+    await update.message.reply_text(f"✅ ပုံ #{len(context.user_data['photos'])} လက်ခံရရှိပါပြီ။")
+    
     # Reset timer
-    await reset_timer(context, user_data, update.effective_chat.id, update.message.message_id)
+    await start_photo_timer(update, context)
+    
+    # If force_next_step is set by timer, we need to transition
+    if context.user_data.get('force_next_step'):
+        context.user_data.pop('force_next_step')
+        context.user_data['waiting_for_photos'] = False
+        context.user_data['step'] = 'waiting_for_movie'
+        return POST_MOVIE
+    
     return POST_PHOTO
 
 async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -227,22 +217,16 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် (mp4, mkv, etc.) ပို့ပေးပါ။")
         return POST_MOVIE
 
-    user_data = context.user_data
-    photos = user_data.get('photos', [])
+    photos = context.user_data.get('photos', [])
     if not photos:
         await message.reply_text("ပိုစတာ မတွေ့ပါ။ /post ဖြင့် ပြန်စတင်ပါ။")
         return ConversationHandler.END
-
-    # Cancel timer if any
-    if user_data.get('timer_task'):
-        user_data['timer_task'].cancel()
 
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
-    # Prepare caption text
-    caption = user_data.get('custom_caption', "🎬 **ရုပ်ရှင်အသစ်**\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။")
+    caption = context.user_data.get('custom_caption', "🎬 **ရုပ်ရှင်အသစ်**\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။")
     safe_caption = escape_markdown(caption)
     keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
@@ -255,94 +239,74 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_media_group(media=media_group)
     except Exception as e:
         logger.error(f"Failed to send media group: {e}")
-        # Fallback: send photos one by one
         for photo in photos:
             await message.reply_photo(photo=photo)
-
-    # Send the caption and buttons as a separate message (after the album)
+    
+    # Send the caption and buttons as a separate message
     try:
         await message.reply_text(text=safe_caption, reply_markup=reply_markup, parse_mode='MarkdownV2')
     except Exception as e:
         await message.reply_text(text=caption, reply_markup=reply_markup)
-
+    
     await message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
-    user_data.clear()
+    
+    # Clean up
+    if 'photo_timer' in context.user_data:
+        context.user_data['photo_timer'].cancel()
+    context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get('timer_task'):
-        context.user_data['timer_task'].cancel()
+    if 'photo_timer' in context.user_data:
+        context.user_data['photo_timer'].cancel()
     await update.message.reply_text("လုပ်ဆောင်ချက် ပယ်ဖျက်ပြီးပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- /post_text with time-based auto-advance ----------
+# ---------- /post_text (multiple photos, auto-detect after 5 sec idle) ----------
 async def post_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံများကို စတင်ပို့ပါ။ ပုံအားလုံးပို့ပြီးပါက စက္ကန့်အနည်းငယ်ကြာပါက အလိုအလျောက် နောက်အဆင့်သို့ ရောက်သွားပါမည်။")
+    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံများကို စတင်ပို့ပါ။ (ပုံအားလုံးပို့ပြီးပါက 5 စက္ကန့်အကြာတွင် အလိုအလျောက် စာသားတောင်းပေးပါမည်)")
     context.user_data['photos'] = []
-    context.user_data['timer_task'] = None
+    context.user_data['waiting_for_photos'] = True
+    context.user_data['step'] = 'waiting_for_photos'
     return POST_TEXT_PHOTO
 
-async def reset_timer_text(context: ContextTypes.DEFAULT_TYPE, user_data: dict, chat_id: int, message_id: int):
-    if user_data.get('timer_task'):
-        user_data['timer_task'].cancel()
-    async def timer_callback():
-        await asyncio.sleep(10)
-        if user_data.get('waiting_for_photos'):
-            if user_data.get('photos'):
-                user_data['waiting_for_photos'] = False
-                await context.bot.send_message(chat_id=chat_id, text="✍️ ယခု ဇာတ်ကားအကြောင်း စာသား (ဇာတ်ညွှန်း) ကို ပို့ပေးပါ။")
-                user_data['auto_advance'] = True
-            else:
-                await context.bot.send_message(chat_id=chat_id, text="❌ အနည်းဆုံး ပုံတစ်ပုံ ပို့ပေးရပါမည်။")
-    task = asyncio.create_task(timer_callback())
-    user_data['timer_task'] = task
-
 async def post_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_data = context.user_data
-    if user_data.get('auto_advance'):
-        await update.message.reply_text("✍️ ကျေးဇူးပြု၍ ဇာတ်ကားအကြောင်း စာသား (ဇာတ်ညွှန်း) ကို ပို့ပေးပါ။")
-        return POST_TEXT_CAPTION
-
-    if not user_data.get('waiting_for_photos', True):
+    if not context.user_data.get('waiting_for_photos'):
         return POST_TEXT_PHOTO
-
-    if update.message.text and update.message.text.strip() == "ပြီးပါပြီ":
-        if not user_data.get('photos'):
-            await update.message.reply_text("အနည်းဆုံး ပုံတစ်ပုံ ပို့ပေးရပါမည်။")
-            return POST_TEXT_PHOTO
-        if user_data.get('timer_task'):
-            user_data['timer_task'].cancel()
-        user_data['waiting_for_photos'] = False
-        await update.message.reply_text("✍️ ယခု ဇာတ်ကားအကြောင်း စာသား (ဇာတ်ညွှန်း) ကို ပို့ပေးပါ။")
-        return POST_TEXT_CAPTION
-
+    
     if not update.message.photo:
         await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_TEXT_PHOTO
-
-    user_data['photos'].append(update.message.photo[-1].file_id)
-    await update.message.reply_text(f"✅ ပုံ #{len(user_data['photos'])} လက်ခံရရှိပါပြီ။")
-    await reset_timer_text(context, user_data, update.effective_chat.id, update.message.message_id)
+    
+    context.user_data['photos'].append(update.message.photo[-1].file_id)
+    await update.message.reply_text(f"✅ ပုံ #{len(context.user_data['photos'])} လက်ခံရရှိပါပြီ။")
+    
+    # Reset timer
+    await start_photo_timer(update, context)
+    
+    if context.user_data.get('force_next_step'):
+        context.user_data.pop('force_next_step')
+        context.user_data['waiting_for_photos'] = False
+        context.user_data['step'] = 'waiting_for_caption'
+        await update.message.reply_text("✍️ ယခု ဇာတ်ကားအကြောင်း စာသား (ဇာတ်ညွှန်း) ကို ပို့ပေးပါ။")
+        return POST_TEXT_CAPTION
+    
     return POST_TEXT_PHOTO
 
 async def post_text_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption_text = update.message.text
-    user_data = context.user_data
-    # Cancel timer if any
-    if user_data.get('timer_task'):
-        user_data['timer_task'].cancel()
-    user_data['caption_text'] = caption_text
+    context.user_data['caption_text'] = caption_text
     telegraph_url = None
     if len(caption_text) > 1024:
         await update.message.reply_text("⏳ စာသားရှည်နေပါသည်။ Telegraph စာမျက်နှာ ဖန်တီးနေပါပြီ...")
         title = f"Movie Synopsis - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         telegraph_url = await create_telegraph_page(title, caption_text)
         if telegraph_url:
-            user_data['telegraph_url'] = telegraph_url
+            context.user_data['telegraph_url'] = telegraph_url
             await update.message.reply_text(f"✅ Telegraph စာမျက်နှာ ဖန်တီးပြီးပါပြီ။\n{telegraph_url}")
         else:
             await update.message.reply_text("❌ Telegraph ဖန်တီးရာတွင် အမှား။ စာသားကို အတိုင်းသုံးပါမည်။")
@@ -363,10 +327,9 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် ပို့ပေးပါ။")
         return POST_TEXT_MOVIE
 
-    user_data = context.user_data
-    photos = user_data.get('photos', [])
-    caption_text = user_data.get('caption_text', '')
-    telegraph_url = user_data.get('telegraph_url')
+    photos = context.user_data.get('photos', [])
+    caption_text = context.user_data.get('caption_text', '')
+    telegraph_url = context.user_data.get('telegraph_url')
     if not photos:
         await message.reply_text("ပိုစတာ မတွေ့ပါ။ /post_text ဖြင့် ပြန်စတင်ပါ။")
         return ConversationHandler.END
@@ -397,20 +360,23 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Failed to send media group: {e}")
         for photo in photos:
             await message.reply_photo(photo=photo)
-
+    
     # Send caption and buttons as separate message
     try:
         await message.reply_text(text=safe_caption, reply_markup=reply_markup, parse_mode='MarkdownV2')
     except:
         await message.reply_text(text=caption, reply_markup=reply_markup)
-
+    
     await message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
-    user_data.clear()
+    
+    if 'photo_timer' in context.user_data:
+        context.user_data['photo_timer'].cancel()
+    context.user_data.clear()
     return ConversationHandler.END
 
 async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get('timer_task'):
-        context.user_data['timer_task'].cancel()
+    if 'photo_timer' in context.user_data:
+        context.user_data['photo_timer'].cancel()
     await update.message.reply_text("လုပ်ဆောင်ချက် ပယ်ဖျက်ပြီးပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
@@ -471,8 +437,8 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data:
-        if context.user_data.get('timer_task'):
-            context.user_data['timer_task'].cancel()
+        if 'photo_timer' in context.user_data:
+            context.user_data['photo_timer'].cancel()
         context.user_data.clear()
         await update.message.reply_text("✅ လက်ရှိလုပ်ဆောင်နေသော လုပ်ငန်းစဉ်ကို ဖျက်သိမ်းလိုက်ပါသည်။")
     else:
@@ -626,7 +592,7 @@ telegram_app = Application.builder().token(TOKEN).build()
 telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post', post_start)],
     states={
-        POST_PHOTO: [MessageHandler(filters.PHOTO | filters.TEXT, post_photo)],
+        POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
         POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_movie)],
     },
     fallbacks=[CommandHandler('cancel', cancel_post)],
@@ -634,7 +600,7 @@ telegram_app.add_handler(ConversationHandler(
 telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post_text', post_text_start)],
     states={
-        POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO | filters.TEXT, post_text_photo)],
+        POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
         POST_TEXT_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_text_caption)],
         POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)],
     },
