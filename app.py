@@ -215,7 +215,7 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Send the caption and buttons as a separate message (after the album)
     try:
-        await message.reply_text(text=safe_caption, reply_markup=reply_markup, parse_mode='MarkdownV2')
+        await message.reply_text(text=caption, reply_markup=reply_markup)
     except Exception as e:
         await message.reply_text(text=caption, reply_markup=reply_markup)
     
