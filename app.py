@@ -122,19 +122,18 @@ async def check_all_channels(user_id, bot):
             return False, ch
     return True, None
 
-# ---------- Auto-delete helper (webhook-safe) ----------
+# ---------- Auto-delete helper ----------
 async def delete_messages_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_ids: list, delay_seconds: int = 300):
     await asyncio.sleep(delay_seconds)
     for msg_id in message_ids:
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-            logger.info(f"Deleted message {msg_id}")
+            logger.info(f"Auto-deleted message {msg_id}")
         except Exception as e:
-            logger.warning(f"Could not delete {msg_id}: {e}")
+            logger.warning(f"Failed to delete {msg_id}: {e}")
 
 # ---------- Escape markdown to prevent parse errors ----------
 def escape_markdown(text: str) -> str:
-    """Escape special characters for MarkdownV2"""
     special_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(special_chars)}])', r'\\\1', text)
 
@@ -142,23 +141,37 @@ def escape_markdown(text: str) -> str:
 POST_PHOTO, POST_MOVIE = range(2)
 POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
 
-# ---------- /post ----------
+# ---------- /post (multiple photos) ----------
 async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ (စာသားပါလျှင် caption တွင် ထည့်နိုင်သည်)။")
+    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ (စာသားပါလျှင် caption တွင် ထည့်နိုင်သည်)။\n\nနောက်ထပ်ပုံများ ထပ်ပို့လိုလျှင် ဆက်ပို့နိုင်ပါသည်။ ပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ထည့်ပါ။")
+    context.user_data['photos'] = []
+    context.user_data['waiting_for_photos'] = True
     return POST_PHOTO
 
 async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Check if user types "ပြီးပါပြီ" to finish photo collection
+    if update.message.text and update.message.text.strip() == "ပြီးပါပြီ":
+        if not context.user_data.get('photos'):
+            await update.message.reply_text("အနည်းဆုံး ပုံတစ်ပုံ ပို့ပေးရပါမည်။")
+            return POST_PHOTO
+        context.user_data['waiting_for_photos'] = False
+        await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
+        return POST_MOVIE
+    
     if not update.message.photo:
-        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
+        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။ ပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ပါ။")
         return POST_PHOTO
-    context.user_data['poster'] = update.message.photo[-1].file_id
-    if update.message.caption:
-        context.user_data['caption'] = update.message.caption
-    await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
-    return POST_MOVIE
+    
+    # Store the photo
+    context.user_data['photos'].append(update.message.photo[-1].file_id)
+    # Capture caption only from the first photo
+    if update.message.caption and len(context.user_data.get('photos', [])) == 1:
+        context.user_data['custom_caption'] = update.message.caption
+    await update.message.reply_text(f"✅ ပုံ #{len(context.user_data['photos'])} လက်ခံရရှိပါပြီ။ နောက်ထပ်ပုံများ ဆက်ပို့နိုင်ပါသည်။\nပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ထည့်ပါ။")
+    return POST_PHOTO
 
 async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -174,25 +187,38 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် (mp4, mkv, etc.) ပို့ပေးပါ။")
         return POST_MOVIE
 
-    poster = context.user_data.get('poster')
-    if not poster:
+    photos = context.user_data.get('photos', [])
+    if not photos:
         await message.reply_text("ပိုစတာ မတွေ့ပါ။ /post ဖြင့် ပြန်စတင်ပါ။")
         return ConversationHandler.END
 
+    # Generate deep link
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
-    caption = context.user_data.get('caption', "🎬 **ရုပ်ရှင်အသစ်**\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။")
-    safe_caption = escape_markdown(caption) if caption else ""
+    # Build caption
+    caption = context.user_data.get('custom_caption', "🎬 **ရုပ်ရှင်အသစ်**\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။")
+    safe_caption = escape_markdown(caption)
     keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Send first photo as main poster (with caption + buttons)
     try:
-        await message.reply_photo(photo=poster, caption=safe_caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode='MarkdownV2')
+        await message.reply_photo(photo=photos[0], caption=safe_caption, reply_markup=reply_markup, parse_mode='MarkdownV2')
     except Exception as e:
-        logger.warning(f"MarkdownV2 failed, sending without parse_mode: {e}")
-        await message.reply_photo(photo=poster, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard))
+        logger.warning(f"Markdown failed, sending without parse_mode: {e}")
+        await message.reply_photo(photo=photos[0], caption=caption, reply_markup=reply_markup)
+    
+    # Send remaining photos (without caption)
+    for i in range(1, len(photos)):
+        try:
+            await message.reply_photo(photo=photos[i])
+        except Exception as e:
+            logger.warning(f"Failed to send extra photo: {e}")
+    
     await message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
@@ -202,21 +228,32 @@ async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- /post_text ----------
+# ---------- /post_text (multiple photos) ----------
 async def post_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ။")
+    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ။\n\nနောက်ထပ်ပုံများ ထပ်ပို့လိုလျှင် ဆက်ပို့နိုင်ပါသည်။ ပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ထည့်ပါ။")
+    context.user_data['photos'] = []
+    context.user_data['waiting_for_photos'] = True
     return POST_TEXT_PHOTO
 
 async def post_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text and update.message.text.strip() == "ပြီးပါပြီ":
+        if not context.user_data.get('photos'):
+            await update.message.reply_text("အနည်းဆုံး ပုံတစ်ပုံ ပို့ပေးရပါမည်။")
+            return POST_TEXT_PHOTO
+        context.user_data['waiting_for_photos'] = False
+        await update.message.reply_text("✍️ ယခု ဇာတ်ကားအကြောင်း စာသား (ဇာတ်ညွှန်း) ကို ပို့ပေးပါ။")
+        return POST_TEXT_CAPTION
+    
     if not update.message.photo:
-        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။")
+        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။ ပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ပါ။")
         return POST_TEXT_PHOTO
-    context.user_data['poster'] = update.message.photo[-1].file_id
-    await update.message.reply_text("✍️ ယခု ဇာတ်ကားအကြောင်း စာသား (ဇာတ်ညွှန်း) ကို ပို့ပေးပါ။")
-    return POST_TEXT_CAPTION
+    
+    context.user_data['photos'].append(update.message.photo[-1].file_id)
+    await update.message.reply_text(f"✅ ပုံ #{len(context.user_data['photos'])} လက်ခံရရှိပါပြီ။ နောက်ထပ်ပုံများ ဆက်ပို့နိုင်ပါသည်။\nပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ထည့်ပါ။")
+    return POST_TEXT_PHOTO
 
 async def post_text_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption_text = update.message.text
@@ -224,7 +261,7 @@ async def post_text_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegraph_url = None
     if len(caption_text) > 1024:
         await update.message.reply_text("⏳ စာသားရှည်နေပါသည်။ Telegraph စာမျက်နှာ ဖန်တီးနေပါပြီ...")
-        title = f"Movie Synopsis {datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        title = f"Movie Synopsis - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         telegraph_url = await create_telegraph_page(title, caption_text)
         if telegraph_url:
             context.user_data['telegraph_url'] = telegraph_url
@@ -248,35 +285,47 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် ပို့ပေးပါ။")
         return POST_TEXT_MOVIE
 
-    poster = context.user_data.get('poster')
+    photos = context.user_data.get('photos', [])
     caption_text = context.user_data.get('caption_text', '')
     telegraph_url = context.user_data.get('telegraph_url')
-    if not poster:
+    if not photos:
         await message.reply_text("ပိုစတာ မတွေ့ပါ။ /post_text ဖြင့် ပြန်စတင်ပါ။")
         return ConversationHandler.END
 
+    # Generate deep link
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
+    # Build caption
     if telegraph_url:
-        preview = caption_text[:200] + "..." if len(caption_text) > 200 else caption_text
+        preview = caption_text[:300] + "..." if len(caption_text) > 300 else caption_text
         caption = f"{preview}\n\n📖 [ဇာတ်ညွှန်းအပြည့်အစုံဖတ်ရန်]({telegraph_url})\n\n🎬 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
-        safe_caption = escape_markdown(caption)
-        parse = 'MarkdownV2'
+        parse_mode = "MarkdownV2"
     else:
         caption = f"{caption_text}\n\n🎬 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။"
-        safe_caption = escape_markdown(caption)
-        parse = 'MarkdownV2'
+        parse_mode = None
 
+    safe_caption = escape_markdown(caption) if parse_mode else caption
     keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Send first photo with caption + buttons
     try:
-        await message.reply_photo(photo=poster, caption=safe_caption, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=parse)
+        await message.reply_photo(photo=photos[0], caption=safe_caption, reply_markup=reply_markup, parse_mode='MarkdownV2')
     except Exception as e:
         logger.warning(f"Markdown failed, sending without parse_mode: {e}")
-        await message.reply_photo(photo=poster, caption=caption, reply_markup=InlineKeyboardMarkup(keyboard))
+        await message.reply_photo(photo=photos[0], caption=caption, reply_markup=reply_markup)
+    
+    # Send remaining photos (without caption)
+    for i in range(1, len(photos)):
+        try:
+            await message.reply_photo(photo=photos[i])
+        except Exception as e:
+            logger.warning(f"Failed to send extra photo: {e}")
+    
     await message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
@@ -313,7 +362,7 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
-    await message.reply_text(f"🔗 **သင်၏ Deep Link အဆင်သင့်ဖြစ်ပါပြီ။**\n\n{deep_link}\n\n**ဖိုင်အမည်:** `{file_name}`", parse_mode="Markdown")
+    await message.reply_text(f"🔗 **သင်၏ Deep Link အဆင်သင့်ဖြစ်ပါပြီ။**\n\n{deep_link}\n\n`{file_name}`", parse_mode="Markdown")
 
 # ---------- Admin commands ----------
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -327,7 +376,7 @@ async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
-        await update.message.reply_text("📢 /broadcast <message>")
+        await update.message.reply_text("📢 `/broadcast <message>` - အသုံးပြုသူအားလုံးသို့ စာပို့ရန်။")
         return
     msg = ' '.join(context.args)
     users = get_all_users()
@@ -351,7 +400,7 @@ async def delete_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         return
     if not context.args:
-        await update.message.reply_text("🗑️ /delete <payload>")
+        await update.message.reply_text("🗑️ `/delete <payload>` - သိမ်းဆည်းထားသော ဖိုင်တစ်ခုကို ဖျက်ရန်။")
         return
     payload = context.args[0]
     if delete_file_by_payload(payload):
@@ -372,10 +421,7 @@ async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("❌ Cancel လုပ်ရန်", callback_data="cmd_cancel")],
         [InlineKeyboardButton("🗑️ ဖိုင်ဖျက်ရန်", callback_data="cmd_delete")],
     ]
-    await update.message.reply_text(
-        "🎬 **ADMIN ထိန်းချုပ်မှု PANEL**\n\nအောက်ပါခလုတ်များမှ သင်လိုချင်သော လုပ်ဆောင်ချက်ကို ရွေးချယ်ပါ။",
-        reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown"
-    )
+    await update.message.reply_text("🎬 **အဒ်မင် ထိန်းချုပ်မှု PANEL**\n\nအောက်ပါခလုတ်များမှ သင်လိုချင်သော လုပ်ဆောင်ချက်ကို ရွေးချယ်ပါ။", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -403,6 +449,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- Start handler (Admin panel + User deep link) ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+
     if is_admin(user_id):
         if context.args:
             payload = context.args[0]
@@ -412,20 +459,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             try:
                 if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
-                    sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=file_name)
+                    sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
                 elif file_name.endswith(('.mp4', '.mkv', '.avi')):
-                    sent_msg = await context.bot.send_video(chat_id=user_id, video=file_id, caption=file_name)
+                    sent_msg = await context.bot.send_video(chat_id=user_id, video=file_id, caption=f"📂 {file_name}")
                 else:
                     sent_msg = await context.bot.send_document(chat_id=user_id, document=file_id, filename=file_name)
-                # Auto-delete after 5 mins
-                context.application.create_task(delete_messages_after_delay(context, user_id, [sent_msg.message_id], 300))
+
+                warning_text = (
+                    "⚠️ ⚠️ ⚠️ **အရေးကြီးပါတယ်** ⚠️ ⚠️ ⚠️\n\n"
+                    "ဤရုပ်ရှင်ဖိုင်များ/ဗီဒီယိုများကို 5 မိနစ်အတွင်း (မူပိုင်ခွင့်ပြဿနာများကြောင့်) ဖျက်ပါမည်။\n\n"
+                    "ကျေးဇူးပြု၍ ဤဖိုင်များ/ဗီဒီယိုများအားလုံးကို သင်၏ Saved Messages များသို့ Forward လုပ်ပြီး ထိုနေရာတွင် ဇာတ်ကားအား ကြည့်ရှုပါ။\n\n"
+                    "ကျွန်ုပ်၏ Channel ကို လာရောက်အားပေးမှုအတွက် ကျေးဇူးအထူးတင်ပါတယ် 🙏🙏🙏\n\n"
+                    "Channel ရေရှည်တည်တံ့ဖို့အတွက် Support ပေးချင်ပါက Wave Pay (09767011991) ကို ကူညီနိုင်ပါတယ်။\n\n"
+                    "အားလုံးကို ကျေးဇူးတင်ပါတယ်။\n\n"
+                    "!!! IMPORTANT !!!\n"
+                    "This Movie Files/Videos will be deleted in 5 mins (Due to Copyright Issues).\n"
+                    "Please forward these ALL Files/Videos to your Saved Messages and start downloading there."
+                )
+                keyboard = [
+                    [InlineKeyboardButton("🎬 Movie Channel", url="https://t.me/moviesandseriesforallwzn")],
+                    [InlineKeyboardButton("🔞 Adult Channel", url="https://t.me/everyboyhobby")],
+                    [InlineKeyboardButton("🎵 Music Channel", url="https://t.me/wznmusiclibary")],
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text, reply_markup=reply_markup)
+
+                context.application.create_task(delete_messages_after_delay(context, user_id, [sent_msg.message_id, warn_msg.message_id], 300))
             except Exception as e:
-                await update.message.reply_text(f"❌ အမှားရှိသည်: {e}")
+                await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
         else:
             await admin_menu(update, context)
         return
 
-    # Non-admin
+    # Non-admin users
     if not context.args:
         await update.message.reply_text(
             "🎬 **ဖိုင်မှ Deep Link ဘော့**\n\n"
@@ -434,26 +500,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "ဖိုင်ကို 5 မိနစ်အကြာတွင် အလိုအလျောက် ဖျက်ပစ်ပါမည်။"
         )
         return
+
     payload = context.args[0]
     file_id, file_name = get_file(payload)
     if not file_id:
         await update.message.reply_text("❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။")
         return
-    ok, _ = await check_all_channels(user_id, context.bot)
+
+    ok, missing_ch = await check_all_channels(user_id, context.bot)
     if not ok:
         msg = "🎬 **ဖိုင်ရယူရန် အောက်ပါ Channel များအားလုံးကို ဝင်ထားပါ။**\n\n"
         for ch in REQUIRED_CHANNELS:
-            msg += f"• {ch['name']}: [ဝင်ရန်]({ch['invite']})\n"
-        await update.message.reply_text(msg, disable_web_page_preview=True)
+            status = "✅" if ch["id"] != missing_ch["id"] else "❌"
+            msg += f"{status} {ch['name']}: [ဝင်ရန်]({ch['invite']})\n"
+        await update.message.reply_text(msg, parse_mode="Markdown", disable_web_page_preview=True)
         return
+
     try:
         if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
-            sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=file_name)
+            sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
         elif file_name.endswith(('.mp4', '.mkv', '.avi')):
-            sent_msg = await context.bot.send_video(chat_id=user_id, video=file_id, caption=file_name)
+            sent_msg = await context.bot.send_video(chat_id=user_id, video=file_id, caption=f"📂 {file_name}")
         else:
             sent_msg = await context.bot.send_document(chat_id=user_id, document=file_id, filename=file_name)
-        warning_text = "⚠️ ⚠️ ⚠️ **အရေးကြီးပါတယ်** ⚠️ ⚠️ ⚠️\n\nဤရုပ်ရှင်ဖိုင်များ/ဗီဒီယိုများကို 5 မိနစ်အတွင်း (မူပိုင်ခွင့်ပြဿနာများကြောင့်) ဖျက်ပါမည်။\n\nကျေးဇူးပြု၍ ဤဖိုင်များ/ဗီဒီယိုများအားလုံးကို သင်၏ Saved Messages များသို့ Forward လုပ်ပြီး ထိုနေရာတွင် ဇာတ်ကားအား ကြည့်ရှုပါ။\n\nကျွန်ုပ်၏ Channel ကို လာရောက်အားပေးမှုအတွက် ကျေးဇူးအထူးတင်ပါတယ် 🙏🙏🙏\n\nChannel ရေရှည်တည်တံ့ဖို့အတွက် Support ပေးချင်ပါက Wave Pay (09767011991) ကို ကူညီနိုင်ပါတယ်။\n\nအားလုံးကို ကျေးဇူးတင်ပါတယ်။\n\n!!! IMPORTANT !!!\nThis Movie Files/Videos will be deleted in 5 mins (Due to Copyright Issues).\nPlease forward these ALL Files/Videos to your Saved Messages and start downloading there."
+
+        warning_text = "⚠️ ဤဖိုင်ကို 5 မိနစ်အတွင်း ဖျက်ပါမည်။ Saved Messages သို့ Forward လုပ်ပြီး သိမ်းဆည်းပါ။"
         warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text)
         context.application.create_task(delete_messages_after_delay(context, user_id, [sent_msg.message_id, warn_msg.message_id], 300))
         add_user(user_id)
@@ -469,20 +540,26 @@ if not WEBHOOK_URL:
 
 telegram_app = Application.builder().token(TOKEN).build()
 
-# Add handlers
+# Conversation handlers
 telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post', post_start)],
-    states={POST_PHOTO: [MessageHandler(filters.PHOTO, post_photo)],
-            POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_movie)]},
+    states={
+        POST_PHOTO: [MessageHandler(filters.PHOTO | filters.TEXT, post_photo)],
+        POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_movie)],
+    },
     fallbacks=[CommandHandler('cancel', cancel_post)],
 ))
 telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post_text', post_text_start)],
-    states={POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO, post_text_photo)],
-            POST_TEXT_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_text_caption)],
-            POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)]},
+    states={
+        POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO | filters.TEXT, post_text_photo)],
+        POST_TEXT_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_text_caption)],
+        POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)],
+    },
     fallbacks=[CommandHandler('cancel', cancel_post_text)],
 ))
+
+# Command handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("stats", stats_command))
 telegram_app.add_handler(CommandHandler("broadcast", broadcast_command))
