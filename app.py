@@ -6,7 +6,7 @@ import secrets
 import re
 from datetime import datetime
 from flask import Flask, request
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters, ContextTypes,
     ConversationHandler, CallbackQueryHandler
@@ -132,144 +132,172 @@ async def delete_messages_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_i
         except Exception as e:
             logger.warning(f"Failed to delete {msg_id}: {e}")
 
-# ---------- Escape markdown to prevent parse errors ----------
+# ---------- Escape markdown ----------
 def escape_markdown(text: str) -> str:
     special_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(special_chars)}])', r'\\\1', text)
 
 # ---------- Conversation states ----------
-POST_PHOTOS, POST_MOVIE = range(2)          # for /post
-POST_TEXT_PHOTOS, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)   # for /post_text
+POST_PHOTO, POST_MOVIE = range(2)
+POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
 
-# ---------- /post (multiple photos, no extra "done" command) ----------
+# ---------- /post (multiple photos as album) ----------
 async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံများကို ဆက်တိုက်ပို့ပေးပါ။\n(ပုံအားလုံးပို့ပြီးပါက Video ဖိုင်ကို ပို့ပေးပါ)")
+    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ (စာသားပါလျှင် caption တွင် ထည့်နိုင်သည်)။\nနောက်ထပ်ပုံများ ထပ်ပို့လိုလျှင် ဆက်ပို့နိုင်ပါသည်။ အားလုံးပို့ပြီးပါက **'ပြီးပါပြီ'** ဟု ပို့ပါ။")
     context.user_data['photos'] = []
-    return POST_PHOTOS
+    context.user_data['waiting_for_photos'] = True
+    return POST_PHOTO
 
-async def post_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Collect photos until a non-photo (video or document) arrives
-    if update.message.photo:
-        context.user_data['photos'].append(update.message.photo[-1].file_id)
-        if update.message.caption and len(context.user_data['photos']) == 1:
-            context.user_data['custom_caption'] = update.message.caption
-        await update.message.reply_text(f"✅ ပုံ #{len(context.user_data['photos'])} လက်ခံရရှိပါပြီ။ ဆက်လက်ပို့နိုင်ပါသည်။")
-        return POST_PHOTOS
-    else:
-        # Check if it's a video file
-        file_obj = None
-        file_name = "movie"
-        if update.message.video:
-            file_obj = update.message.video
-            file_name = file_obj.file_name or "video"
-        elif update.message.document and update.message.document.mime_type.startswith('video/'):
-            file_obj = update.message.document
-            file_name = file_obj.file_name or "movie"
-        else:
-            await update.message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် (mp4, mkv, etc.) ပို့ပေးပါ။")
-            return POST_PHOTOS
-
-        photos = context.user_data.get('photos', [])
-        if not photos:
+async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text and update.message.text.strip() == "ပြီးပါပြီ":
+        if not context.user_data.get('photos'):
             await update.message.reply_text("အနည်းဆုံး ပုံတစ်ပုံ ပို့ပေးရပါမည်။")
-            return POST_PHOTOS
+            return POST_PHOTO
+        context.user_data['waiting_for_photos'] = False
+        await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
+        return POST_MOVIE
+    
+    if not update.message.photo:
+        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။ ပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ပါ။")
+        return POST_PHOTO
+    
+    context.user_data['photos'].append(update.message.photo[-1].file_id)
+    if update.message.caption and len(context.user_data.get('photos', [])) == 1:
+        context.user_data['custom_caption'] = update.message.caption
+    await update.message.reply_text(f"✅ ပုံ #{len(context.user_data['photos'])} လက်ခံရရှိပါပြီ။ နောက်ထပ်ပုံများ ဆက်ပို့နိုင်ပါသည်။ ပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ပါ။")
+    return POST_PHOTO
 
-        payload = generate_payload()
-        save_file(payload, file_obj.file_id, file_name)
-        deep_link = create_deep_linked_url(BOT_USERNAME, payload)
+async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    file_obj = None
+    file_name = "movie"
+    if message.video:
+        file_obj = message.video
+        file_name = file_obj.file_name or "video"
+    elif message.document and message.document.mime_type.startswith('video/'):
+        file_obj = message.document
+        file_name = file_obj.file_name or "movie"
+    else:
+        await message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် (mp4, mkv, etc.) ပို့ပေးပါ။")
+        return POST_MOVIE
 
-        caption = context.user_data.get('custom_caption', "🎬 **ရုပ်ရှင်အသစ်**\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။")
-        safe_caption = escape_markdown(caption)
-        keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
-        for ch in REQUIRED_CHANNELS:
-            keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
-        reply_markup = InlineKeyboardMarkup(keyboard)
+    photos = context.user_data.get('photos', [])
+    if not photos:
+        await message.reply_text("ပိုစတာ မတွေ့ပါ။ /post ဖြင့် ပြန်စတင်ပါ။")
+        return ConversationHandler.END
 
-        # Send first photo with caption + buttons
+    payload = generate_payload()
+    save_file(payload, file_obj.file_id, file_name)
+    deep_link = create_deep_linked_url(BOT_USERNAME, payload)
+
+    caption = context.user_data.get('custom_caption', "🎬 **ရုပ်ရှင်အသစ်**\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။")
+    safe_caption = escape_markdown(caption)
+    keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
+    for ch in REQUIRED_CHANNELS:
+        keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    # Create media group for all photos
+    media_group = []
+    for i, photo_id in enumerate(photos):
+        if i == 0:
+            media_group.append(InputMediaPhoto(media=photo_id, caption=safe_caption, parse_mode='MarkdownV2'))
+        else:
+            media_group.append(InputMediaPhoto(media=photo_id))
+    
+    # Send as album
+    try:
+        await message.reply_media_group(media=media_group)
+        # Send buttons separately (Telegram doesn't allow reply_markup on media group)
+        await message.reply_text("👇 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။", reply_markup=reply_markup)
+    except Exception as e:
+        logger.error(f"Media group failed: {e}")
+        # Fallback: send first photo with caption+buttons, then others
         try:
-            await update.message.reply_photo(photo=photos[0], caption=safe_caption, reply_markup=reply_markup, parse_mode='MarkdownV2')
-        except Exception as e:
-            logger.warning(f"Markdown failed, sending without parse_mode: {e}")
-            await update.message.reply_photo(photo=photos[0], caption=caption, reply_markup=reply_markup)
-
-        # Send remaining photos (without caption)
+            await message.reply_photo(photo=photos[0], caption=safe_caption, reply_markup=reply_markup, parse_mode='MarkdownV2')
+        except:
+            await message.reply_photo(photo=photos[0], caption=caption, reply_markup=reply_markup)
         for i in range(1, len(photos)):
             try:
-                await update.message.reply_photo(photo=photos[i])
+                await message.reply_photo(photo=photos[i])
             except:
                 pass
-
-        await update.message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
-        context.user_data.clear()
-        return ConversationHandler.END
+    
+    await message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
+    context.user_data.clear()
+    return ConversationHandler.END
 
 async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("လုပ်ဆောင်ချက် ပယ်ဖျက်ပြီးပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- /post_text (multiple photos, no extra "done" command) ----------
+# ---------- /post_text (multiple photos as album) ----------
 async def post_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံများကို ဆက်တိုက်ပို့ပေးပါ။\n(ပုံအားလုံးပို့ပြီးပါက စာသား (ဇာတ်ညွှန်း) ကို ပို့ပေးပါ)")
+    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံတစ်ပုံ ပို့ပေးပါ။\nနောက်ထပ်ပုံများ ထပ်ပို့လိုလျှင် ဆက်ပို့နိုင်ပါသည်။ ပြီးပါက 'ပြီးပါပြီ' ဟု ပို့ပါ။")
     context.user_data['photos'] = []
-    return POST_TEXT_PHOTOS
+    context.user_data['waiting_for_photos'] = True
+    return POST_TEXT_PHOTO
 
-async def post_text_photos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.photo:
-        context.user_data['photos'].append(update.message.photo[-1].file_id)
-        await update.message.reply_text(f"✅ ပုံ #{len(context.user_data['photos'])} လက်ခံရရှိပါပြီ။ ဆက်လက်ပို့နိုင်ပါသည်။")
-        return POST_TEXT_PHOTOS
-    else:
-        # Not a photo -> it should be text (caption)
-        caption_text = update.message.text
-        if not caption_text:
-            await update.message.reply_text("ကျေးဇူးပြု၍ စာသား (ဇာတ်ညွှန်း) ကို ပို့ပေးပါ။")
-            return POST_TEXT_PHOTOS
-
-        photos = context.user_data.get('photos', [])
-        if not photos:
+async def post_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.text and update.message.text.strip() == "ပြီးပါပြီ":
+        if not context.user_data.get('photos'):
             await update.message.reply_text("အနည်းဆုံး ပုံတစ်ပုံ ပို့ပေးရပါမည်။")
-            return POST_TEXT_PHOTOS
+            return POST_TEXT_PHOTO
+        context.user_data['waiting_for_photos'] = False
+        await update.message.reply_text("✍️ ယခု ဇာတ်ကားအကြောင်း စာသား (ဇာတ်ညွှန်း) ကို ပို့ပေးပါ။")
+        return POST_TEXT_CAPTION
+    
+    if not update.message.photo:
+        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။ ပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ပါ။")
+        return POST_TEXT_PHOTO
+    
+    context.user_data['photos'].append(update.message.photo[-1].file_id)
+    await update.message.reply_text(f"✅ ပုံ #{len(context.user_data['photos'])} လက်ခံရရှိပါပြီ။ နောက်ထပ်ပုံများ ဆက်ပို့နိုင်ပါသည်။ ပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ပါ။")
+    return POST_TEXT_PHOTO
 
-        context.user_data['caption_text'] = caption_text
-        await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
-        return POST_TEXT_MOVIE
-
-async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file_obj = None
-    file_name = "movie"
-    if update.message.video:
-        file_obj = update.message.video
-        file_name = file_obj.file_name or "video"
-    elif update.message.document and update.message.document.mime_type.startswith('video/'):
-        file_obj = update.message.document
-        file_name = file_obj.file_name or "movie"
-    else:
-        await update.message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် ပို့ပေးပါ။")
-        return POST_TEXT_MOVIE
-
-    photos = context.user_data.get('photos', [])
-    caption_text = context.user_data.get('caption_text', '')
-    if not photos:
-        await update.message.reply_text("ပိုစတာ မတွေ့ပါ။ /post_text ဖြင့် ပြန်စတင်ပါ။")
-        return ConversationHandler.END
-
-    # Check if Telegraph needed
+async def post_text_caption(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    caption_text = update.message.text
+    context.user_data['caption_text'] = caption_text
     telegraph_url = None
     if len(caption_text) > 1024:
         await update.message.reply_text("⏳ စာသားရှည်နေပါသည်။ Telegraph စာမျက်နှာ ဖန်တီးနေပါပြီ...")
         title = f"Movie Synopsis - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         telegraph_url = await create_telegraph_page(title, caption_text)
         if telegraph_url:
+            context.user_data['telegraph_url'] = telegraph_url
             await update.message.reply_text(f"✅ Telegraph စာမျက်နှာ ဖန်တီးပြီးပါပြီ။\n{telegraph_url}")
         else:
             await update.message.reply_text("❌ Telegraph ဖန်တီးရာတွင် အမှား။ စာသားကို အတိုင်းသုံးပါမည်။")
+    await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
+    return POST_TEXT_MOVIE
+
+async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    file_obj = None
+    file_name = "movie"
+    if message.video:
+        file_obj = message.video
+        file_name = file_obj.file_name or "video"
+    elif message.document and message.document.mime_type.startswith('video/'):
+        file_obj = message.document
+        file_name = file_obj.file_name or "movie"
+    else:
+        await message.reply_text("ကျေးဇူးပြု၍ ဗီဒီယိုဖိုင် ပို့ပေးပါ။")
+        return POST_TEXT_MOVIE
+
+    photos = context.user_data.get('photos', [])
+    caption_text = context.user_data.get('caption_text', '')
+    telegraph_url = context.user_data.get('telegraph_url')
+    if not photos:
+        await message.reply_text("ပိုစတာ မတွေ့ပါ။ /post_text ဖြင့် ပြန်စတင်ပါ။")
+        return ConversationHandler.END
 
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
@@ -289,21 +317,30 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Send first photo with caption+buttons
+    # Create media group for all photos
+    media_group = []
+    for i, photo_id in enumerate(photos):
+        if i == 0:
+            media_group.append(InputMediaPhoto(media=photo_id, caption=safe_caption, parse_mode='MarkdownV2' if parse_mode else None))
+        else:
+            media_group.append(InputMediaPhoto(media=photo_id))
+    
     try:
-        await update.message.reply_photo(photo=photos[0], caption=safe_caption, reply_markup=reply_markup, parse_mode='MarkdownV2')
+        await message.reply_media_group(media=media_group)
+        await message.reply_text("👇 ရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။", reply_markup=reply_markup)
     except Exception as e:
-        logger.warning(f"Markdown failed, sending without parse_mode: {e}")
-        await update.message.reply_photo(photo=photos[0], caption=caption, reply_markup=reply_markup)
-
-    # Send remaining photos
-    for i in range(1, len(photos)):
+        logger.error(f"Media group failed: {e}")
         try:
-            await update.message.reply_photo(photo=photos[i])
+            await message.reply_photo(photo=photos[0], caption=safe_caption, reply_markup=reply_markup, parse_mode='MarkdownV2')
         except:
-            pass
-
-    await update.message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
+            await message.reply_photo(photo=photos[0], caption=caption, reply_markup=reply_markup)
+        for i in range(1, len(photos)):
+            try:
+                await message.reply_photo(photo=photos[i])
+            except:
+                pass
+    
+    await message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -521,14 +558,16 @@ telegram_app = Application.builder().token(TOKEN).build()
 telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post', post_start)],
     states={
-        POST_PHOTOS: [MessageHandler(filters.PHOTO | filters.VIDEO | filters.Document.ALL, post_photos)],
+        POST_PHOTO: [MessageHandler(filters.PHOTO | filters.TEXT, post_photo)],
+        POST_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_movie)],
     },
     fallbacks=[CommandHandler('cancel', cancel_post)],
 ))
 telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post_text', post_text_start)],
     states={
-        POST_TEXT_PHOTOS: [MessageHandler(filters.PHOTO, post_text_photos)],
+        POST_TEXT_PHOTO: [MessageHandler(filters.PHOTO | filters.TEXT, post_text_photo)],
+        POST_TEXT_CAPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_text_caption)],
         POST_TEXT_MOVIE: [MessageHandler(filters.VIDEO | filters.Document.ALL, post_text_movie)],
     },
     fallbacks=[CommandHandler('cancel', cancel_post_text)],
