@@ -141,19 +141,19 @@ def escape_markdown(text: str) -> str:
 POST_PHOTO, POST_MOVIE = range(2)
 POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
 
-# ---------- /post (multiple photos, auto detect when stop sending) ----------
+# ---------- /post (multiple photos, "ok" to finish) ----------
 async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံများကို စတင်ပို့ပါ။ ပုံအားလုံးပို့ပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ပါ။")
+    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံများကို စတင်ပို့ပါ။ ပုံအားလုံးပို့ပြီးပါက 'ok' ဟု ရိုက်ပါ။")
     context.user_data['photos'] = []
     context.user_data['waiting_for_photos'] = True
     return POST_PHOTO
 
 async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check for "done" command
-    if update.message.text and update.message.text.strip() == "ပြီးပါပြီ":
+    if update.message.text and update.message.text.strip().lower() == "ok":
         if not context.user_data.get('photos'):
             await update.message.reply_text("အနည်းဆုံး ပုံတစ်ပုံ ပို့ပေးရပါမည်။")
             return POST_PHOTO
@@ -162,7 +162,7 @@ async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return POST_MOVIE
     
     if not update.message.photo:
-        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။ ပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ပါ။")
+        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။ ပြီးပါက 'ok' ဟု ရိုက်ပါ။")
         return POST_PHOTO
     
     context.user_data['photos'].append(update.message.photo[-1].file_id)
@@ -228,18 +228,18 @@ async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- /post_text (multiple photos) ----------
+# ---------- /post_text (multiple photos, "ok" to finish) ----------
 async def post_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
         return ConversationHandler.END
-    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံများကို စတင်ပို့ပါ။ ပုံအားလုံးပို့ပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ပါ။")
+    await update.message.reply_text("📸 ပိုစတာ (Poster) ပုံများကို စတင်ပို့ပါ။ ပုံအားလုံးပို့ပြီးပါက 'ok' ဟု ရိုက်ပါ။")
     context.user_data['photos'] = []
     context.user_data['waiting_for_photos'] = True
     return POST_TEXT_PHOTO
 
 async def post_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text and update.message.text.strip() == "ပြီးပါပြီ":
+    if update.message.text and update.message.text.strip().lower() == "ok":
         if not context.user_data.get('photos'):
             await update.message.reply_text("အနည်းဆုံး ပုံတစ်ပုံ ပို့ပေးရပါမည်။")
             return POST_TEXT_PHOTO
@@ -248,7 +248,7 @@ async def post_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return POST_TEXT_CAPTION
     
     if not update.message.photo:
-        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။ ပြီးပါက 'ပြီးပါပြီ' ဟု ရိုက်ပါ။")
+        await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။ ပြီးပါက 'ok' ဟု ရိုက်ပါ။")
         return POST_TEXT_PHOTO
     
     context.user_data['photos'].append(update.message.photo[-1].file_id)
