@@ -15,8 +15,7 @@ from telegram.helpers import create_deep_linked_url
 from pymongo import MongoClient
 from telegraph import Telegraph
 
-# Logging ကို DEBUG အထိမြှင့်ထားပြီး အသေးစိတ်ကြည့်ရန်
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -88,20 +87,17 @@ async def create_telegraph_page(title, content):
     except:
         return None
 
-# ---------- Telegram Config (ခိုင်မာစွာ ပြင်ဆင်ထားသည်) ----------
+# ---------- Telegram Config ----------
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-RAW_BOT_USERNAME = os.environ.get("BOT_USERNAME", "")
 
-# သေချာ ဖြတ်တောက်ပြီး @ ကိုဖယ်ရှားပါ
-BOT_USERNAME = RAW_BOT_USERNAME.strip()
-if BOT_USERNAME.startswith("@"):
-    BOT_USERNAME = BOT_USERNAME[1:]
+# 🔥🔥🔥 အရေးကြီး: ဒီမှာ ခင်ဗျားရဲ့ Bot Username ကို အတင်းထည့်ပါ ( @ မပါဘူး )
+BOT_USERNAME = "WZNmoviefilsend_bot"  # ← ဒီနေရာကို ပြင်ပါ
 
-if not TOKEN or not BOT_USERNAME:
-    logger.error("TELEGRAM_TOKEN and BOT_USERNAME required")
+if not TOKEN:
+    logger.error("TELEGRAM_TOKEN not set")
     sys.exit(1)
 
-logger.info(f"🔧 Configured Bot Username (after cleaning): @{BOT_USERNAME}")
+logger.info(f"🔧 Using Bot Username: @{BOT_USERNAME}")
 
 ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_ID", "").split(",") if x.strip()]
 
@@ -197,7 +193,6 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
     
-    # 🔥 အရေးကြီး: ထုတ်လိုက်တဲ့ လင့်ခ်ကို Log ထဲမှာ သေချာပြပါ
     logger.info(f"✅ NEW POST DEEP LINK: {deep_link}")
 
     caption = context.user_data.get('custom_caption', "🎬 ရုပ်ရှင်အသစ်\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။")
@@ -290,7 +285,6 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
     
-    # 🔥 အရေးကြီး: ထုတ်လိုက်တဲ့ လင့်ခ်ကို Log ထဲမှာ သေချာပြပါ
     logger.info(f"✅ NEW POST_TEXT DEEP LINK: {deep_link}")
 
     if telegraph_url:
@@ -434,12 +428,11 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_delete":
         await query.edit_message_text("🗑️ /delete <payload> ဖြင့် ဖိုင်ဖျက်နိုင်ပါသည်။")
 
-# ---------- START (ပြင်ဆင်ပြီး) ----------
+# ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    logger.info(f"🟢 Start command received from User ID: {user_id}, Args: {context.args}")
+    logger.info(f"🟢 Start from User ID: {user_id}, Args: {context.args}")
 
-    # Admin အတွက် (Channel မစစ်ဘဲ တန်းပို့)
     if is_admin(user_id):
         if context.args:
             payload = context.args[0]
@@ -481,7 +474,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await admin_menu(update, context)
         return
 
-    # သာမန် User အတွက်
     if not context.args:
         await update.message.reply_text(
             "🎬 ဖိုင်မှ Deep Link ဘော့\n\n"
@@ -533,7 +525,7 @@ if not WEBHOOK_URL:
     logger.error("WEBHOOK_URL not set")
     sys.exit(1)
 
-logger.info(f"🌐 Webhook URL will be set to: {WEBHOOK_URL}")
+logger.info(f"🌐 Webhook URL: {WEBHOOK_URL}")
 
 telegram_app = Application.builder().token(TOKEN).build()
 
@@ -569,7 +561,7 @@ def webhook():
     try:
         data = request.get_json(force=True)
         update = Update.de_json(data, telegram_app.bot)
-        logger.info(f"📨 Webhook received update ID: {update.update_id}")
+        logger.info(f"📨 Webhook received update")
         asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), loop)
         return "ok", 200
     except Exception as e:
@@ -580,26 +572,15 @@ def start_flask():
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, use_reloader=False)
 
-async def initialize_and_set_webhook():
+async def set_webhook():
     await telegram_app.initialize()
-    # 🔥 တကယ့် Bot Username ကို သေချာစစ်ပြီး သတိပေးမယ်
-    me = await telegram_app.bot.get_me()
-    logger.info(f"🤖 Actual Bot Username from Telegram: @{me.username}")
-    
-    if BOT_USERNAME != me.username:
-        logger.warning(f"⚠️⚠️⚠️ CRITICAL: BOT_USERNAME env ('{BOT_USERNAME}') does NOT match actual bot username ('{me.username}')!")
-        logger.warning(f"Deep links will FAIL. Please set BOT_USERNAME to '{me.username}' (without @)")
-        # ခင်ဗျားကို သိသာအောင် ဒီမှာ ပြင်ပေးလိုက်မယ် (သတိပေးချက်ပါ)
-        # ဒါပေမယ့် ကျွန်တော်တို့ ဒီမှာတင် ပြင်လိုက်မယ် (ဒါပေမယ့် env ကိုပြင်တာမဟုတ်လို့ နောက်တစ်ခါပြန်ဖြစ်နိုင်တယ်)
-        # ဒါကြောင့် သတိပေးရုံပါ။
-    
     await telegram_app.bot.set_webhook(WEBHOOK_URL)
     logger.info(f"✅ Webhook set to {WEBHOOK_URL}")
 
 if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(initialize_and_set_webhook())
+    loop.run_until_complete(set_webhook())
     threading.Thread(target=start_flask, daemon=True).start()
     try:
         loop.run_forever()
