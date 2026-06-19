@@ -15,7 +15,7 @@ from telegram.helpers import create_deep_linked_url
 from pymongo import MongoClient
 from telegraph import Telegraph
 
-logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -89,36 +89,30 @@ async def create_telegraph_page(title, content):
 
 # ---------- Telegram Config ----------
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-BOT_USERNAME = "WZNmoviefilsend_bot"
+BOT_USERNAME = "WZNmoviefilsend_bot"  # @ မပါဘူး
 
 if not TOKEN:
     logger.error("TELEGRAM_TOKEN not set")
     sys.exit(1)
 
-ADMIN_IDS = []
-raw_admin_ids = os.environ.get("ADMIN_ID", "")
-if raw_admin_ids:
-    ADMIN_IDS = [int(x.strip()) for x in raw_admin_ids.split(",") if x.strip()]
-    logger.info(f"👑 Admin IDs: {ADMIN_IDS}")
-else:
-    logger.warning("⚠️ No ADMIN_ID set!")
-
 logger.info(f"🔧 Using Bot Username: @{BOT_USERNAME}")
 
-# 🔥 ဒီနေရာမှာ Channel ID တွေကို Integer (int) အနေနဲ့ သတ်မှတ်ပါ
+ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_ID", "").split(",") if x.strip()]
+logger.info(f"👑 Admin IDs: {ADMIN_IDS}")
+
+# ============================================================
+# 🔥🔥🔥 အရေးကြီး - အောက်ပါ ID တွေကို ခင်ဗျား ရယူထားတဲ့ ID အသစ်တွေနဲ့ အစားထိုးပါ
+# ============================================================
 REQUIRED_CHANNELS = [
-    {"id": -1003753299714, "name": "🎬 ဇာတ်ကားချန်နယ် (ပင်မ)", "invite": "https://t.me/wznmoviescollector"},
-    {"id": -1003899625672, "name": "🎬 ဇာတ်ကားချန်နယ် (အရံ)", "invite": "https://t.me/moviesandseriesforallwzn"},
-    {"id": -1003792838735, "name": "🔞 လူကြီးများအတွက် သီးသန့်ချန်နယ်", "invite": "https://t.me/everyboyhobby"},
-    {"id": -1003785717514, "name": "🎵 မြန်မာသီချင်းချန်နယ်", "invite": "https://t.me/wznmusiclibary"}
+    {"id": "-1003753299714", "name": "🎬 ဇာတ်ကားချန်နယ် (ပင်မ)", "invite": "https://t.me/wznmoviescollector"},
+    {"id": "-1003899625672", "name": "🎬 ဇာတ်ကားချန်နယ် (အရံ)", "invite": "https://t.me/moviesandseriesforallwzn"},
+    {"id": "-1003792838735", "name": "🔞 လူကြီးများအတွက် သီးသန့်ချန်နယ်", "invite": "https://t.me/everyboyhobby"},
+    {"id": "-1003785717514", "name": "🎵 မြန်မာသီချင်းချန်နယ်", "invite": "https://t.me/wznmusiclibary"}
 ]
 
 def is_admin(user_id):
     result = user_id in ADMIN_IDS
-    if result:
-        logger.info(f"✅ User {user_id} is ADMIN")
-    else:
-        logger.info(f"❌ User {user_id} is NOT admin")
+    logger.info(f"🔍 User {user_id} is admin? {result}")
     return result
 
 def generate_payload():
@@ -126,11 +120,8 @@ def generate_payload():
 
 async def is_member_of_channel(user_id, channel_id, bot):
     try:
-        logger.debug(f"Checking channel {channel_id} for user {user_id}")
         member = await bot.get_chat_member(chat_id=channel_id, user_id=user_id)
-        is_member = member.status in ["member", "administrator", "creator"]
-        logger.info(f"User {user_id} in channel {channel_id}: {is_member} (status: {member.status})")
-        return is_member
+        return member.status in ["member", "administrator", "creator"]
     except Exception as e:
         logger.error(f"Channel check error for {channel_id}: {e}")
         return False
@@ -140,9 +131,6 @@ async def check_all_channels(user_id, bot):
     for ch in REQUIRED_CHANNELS:
         if not await is_member_of_channel(user_id, ch["id"], bot):
             missing.append(ch)
-            logger.warning(f"User {user_id} is NOT in channel {ch['id']} ({ch['name']})")
-        else:
-            logger.info(f"User {user_id} IS in channel {ch['id']} ({ch['name']})")
     return len(missing) == 0, missing
 
 # ---------- Auto-delete helper ----------
@@ -154,6 +142,34 @@ async def delete_messages_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_i
             logger.info(f"Auto-deleted message {msg_id}")
         except Exception as e:
             logger.warning(f"Failed to delete {msg_id}: {e}")
+
+# ---------- /getid Command ----------
+async def get_channel_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update.effective_user.id):
+        await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "📌 /getid <channel_username>\n\n"
+            "ဥပမာ: /getid moviesandseriesforallwzn\n"
+            "( @ မပါဘဲ ရိုက်ပါ )"
+        )
+        return
+    
+    username = context.args[0].strip()
+    if username.startswith("@"):
+        username = username[1:]
+    
+    try:
+        chat = await context.bot.get_chat(f"@{username}")
+        await update.message.reply_text(
+            f"✅ Channel ID: `{chat.id}`\n"
+            f"Channel Name: {chat.title}\n"
+            f"Username: @{chat.username}"
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ မတွေ့ပါ။ Error: {e}")
 
 # ---------- Conversation states ----------
 POST_PHOTO, POST_MOVIE = range(2)
@@ -444,15 +460,11 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_delete":
         await query.edit_message_text("🗑️ /delete <payload> ဖြင့် ဖိုင်ဖျက်နိုင်ပါသည်။")
 
-# ============================================================
-# ========== 🔥 START (ပြင်ဆင်ပြီး) ==========
-# ============================================================
+# ---------- START ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"🟢 Start from User ID: {user_id}, Args: {context.args}")
-    logger.info(f"🔍 Is user admin? {is_admin(user_id)}")
 
-    # ----- Admin ဖြစ်ရင် Channel မစစ်ဘဲ ကျော်ပါ -----
     if is_admin(user_id):
         logger.info(f"✅ User {user_id} is admin - skipping channel check")
         if context.args:
@@ -495,7 +507,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await admin_menu(update, context)
         return
 
-    # ----- သာမန် User အတွက် (Channel စစ်မယ်) -----
+    # ----- သာမန် User အတွက် -----
     logger.info(f"ℹ️ User {user_id} is NOT admin - checking channels")
     
     try:
@@ -518,7 +530,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # 🔥 Channel Check ကို ပိုမိုကောင်းမွန်အောင်လုပ်ထားတယ်
         ok, missing = await check_all_channels(user_id, context.bot)
         
         if not ok:
@@ -531,7 +542,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(msg, disable_web_page_preview=True)
             return
 
-        # Channel အားလုံးဝင်ထားပြီးရင် ဖိုင်ပို့မယ်
         if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
             sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
         elif file_name.endswith(('.mp4', '.mkv', '.avi')):
@@ -585,6 +595,7 @@ telegram_app.add_handler(CommandHandler("broadcast", broadcast_command))
 telegram_app.add_handler(CommandHandler("cancel", cancel_command))
 telegram_app.add_handler(CommandHandler("delete", delete_command))
 telegram_app.add_handler(CommandHandler("menu", admin_menu))
+telegram_app.add_handler(CommandHandler("getid", get_channel_id))  # 🔥 အသစ်ထည့်ထားတယ်
 telegram_app.add_handler(CallbackQueryHandler(menu_callback, pattern="cmd_"))
 telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
 
