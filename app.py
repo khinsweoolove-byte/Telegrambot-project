@@ -103,12 +103,11 @@ ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_ID", "").split(",") i
 logger.info(f"👑 Admin IDs: {ADMIN_IDS}")
 
 # ============================================================
-# 🔥🔥🔥 Environment Variable ကနေ Channel IDs ကိုဖတ်မယ်
+# 🔥 Environment Variable ကနေ Channel IDs ကိုဖတ်မယ်
 # ============================================================
 RAW_CHANNELS = os.environ.get("REQUIRED_CHANNELS", "")
 REQUIRED_CHANNELS = []
 
-# Channel နာမည်တွေကို သတ်မှတ်ပါ
 CHANNEL_NAMES = {
     "-1003753299714": "🎬 ဇာတ်ကားချန်နယ် (ပင်မ)",
     "-1003899625672": "🎬 ဇာတ်ကားချန်နယ် (အရံ)",
@@ -116,7 +115,6 @@ CHANNEL_NAMES = {
     "-1003785717514": "🎵 မြန်မာသီချင်းချန်နယ်"
 }
 
-# Channel Invite Links (ခင်ဗျားရဲ့ Channel တွေရဲ့ Link)
 CHANNEL_INVITES = {
     "-1003753299714": "https://t.me/wznmoviescollector",
     "-1003899625672": "https://t.me/moviesandseriesforallwzn",
@@ -133,7 +131,6 @@ if RAW_CHANNELS:
             REQUIRED_CHANNELS.append({"id": ch_id, "name": name, "invite": invite})
     logger.info(f"📢 Loaded {len(REQUIRED_CHANNELS)} channels from ENV")
 else:
-    # Fallback - ခင်ဗျား သေချာထည့်ထားရင် ဒီအတိုင်းသုံးမယ်
     REQUIRED_CHANNELS = [
         {"id": "-1003753299714", "name": "🎬 ဇာတ်ကားချန်နယ် (ပင်မ)", "invite": "https://t.me/wznmoviescollector"},
         {"id": "-1003899625672", "name": "🎬 ဇာတ်ကားချန်နယ် (အရံ)", "invite": "https://t.me/moviesandseriesforallwzn"},
@@ -465,7 +462,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🗑️ /delete <payload> ဖြင့် ဖိုင်ဖျက်နိုင်ပါသည်။")
 
 # ============================================================
-# ========== 🔥 START (ပြင်ဆင်ပြီး) ==========
+# ========== START FUNCTION (ပြင်ဆင်ပြီး) ==========
 # ============================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -488,16 +485,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     sent_msg = await context.bot.send_document(chat_id=user_id, document=file_id, filename=file_name)
 
+                # 🔥 သတိပေးစာ (ခင်ဗျား လိုချင်တဲ့အတိုင်း)
                 warning_text = (
                     "⚠️ ⚠️ ⚠️ အရေးကြီးပါတယ် ⚠️ ⚠️ ⚠️\n\n"
-                    "ဤရုပ်ရှင်ဖိုင်များ/ဗီဒီယိုများကို 5 မိနစ်အတွင်း (မူပိုင်ခွင့်ပြဿနာများကြောင့်) ဖျက်ပါမည်။\n\n"
-                    "ကျေးဇူးပြု၍ ဤဖိုင်များ/ဗီဒီယိုများအားလုံးကို သင်၏ Saved Messages များသို့ Forward လုပ်ပြီး ထိုနေရာတွင် ဇာတ်ကားအား ကြည့်ရှုပါ။\n\n"
-                    "ကျွန်ုပ်၏ Channel ကို လာရောက်အားပေးမှုအတွက် ကျေးဇူးအထူးတင်ပါတယ် 🙏🙏🙏\n\n"
-                    "Channel ရေရှည်တည်တံ့ဖို့အတွက် Support ပေးချင်ပါက Wave Pay (09767011991) ကို ကူညီနိုင်ပါတယ်။\n\n"
-                    "အားလုံးကို ကျေးဇူးတင်ပါတယ်။\n\n"
-                    "!!! IMPORTANT !!!\n"
-                    "This Movie Files/Videos will be deleted in 5 mins (Due to Copyright Issues).\n"
-                    "Please forward these ALL Files/Videos to your Saved Messages and start downloading there."
+                    "👉ဤရုပ်ရှင်ဖိုင်များ/ဗီဒီယိုများကို 5 မိနစ်အတွင်း (မူပိုင်ခွင့်ပြဿနာများကြောင့်) ဖျက်ပါမည်။\n"
+                    "👉ကျေးဇူးပြု၍ ဤဖိုင်များ/ဗီဒီယိုများအားလုံးကို သင်၏ Saved Messages များသို့ Forward လုပ်ပြီး ထိုနေရာတွင် ဇာတ်ကားအား ကြည့်ရှုပါ။\n"
+                    "👉ကျွန်ုပ်၏ Channel ကို လာရောက်အားပေးမှုအတွက် ကျေးဇူးအထူးတင်ပါတယ် 🙏🙏🙏\n"
+                    "👉Channel ရေရှည်တည်တံ့ဖို့အတွက် Support ပေးချင်ပါက Wave Pay (09767011991) ကို ကူညီနိုင်ပါတယ်။\n"
+                    "👉Channel ကို Share ခြင်းဖြင့်လည်း ကူညီနိုင်ပါတယ်။\n"
+                    "👉အားလုံးကို ကျေးဇူးတင်ပါတယ်။"
                 )
                 keyboard = [
                     [InlineKeyboardButton("🎬 Movie Channel", url="https://t.me/moviesandseriesforallwzn")],
@@ -540,17 +536,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # 🔥 Channel အားလုံး ဝင်ထားရဲ့လား စစ်မယ်
         ok, missing = await check_all_channels(user_id, context.bot)
         
-        # မဝင်သေးရင် Button တွေနဲ့ ပြမယ် (စာတန်းရှည်ကြီး မပါတော့ဘူး)
+        # မဝင်သေးရင် Button တွေနဲ့ ပြမယ်
         if not ok:
             keyboard = []
             for ch in REQUIRED_CHANNELS:
                 if ch in missing:
-                    # မဝင်သေးတဲ့ Channel ကို Join Button နဲ့ပြမယ်
                     keyboard.append([InlineKeyboardButton(f"❌ {ch['name']} ဝင်ရန်", url=ch['invite'])])
                 else:
                     keyboard.append([InlineKeyboardButton(f"✅ {ch['name']}", callback_data="joined")])
             
-            # Refresh Button ထည့်မယ်
             keyboard.append([InlineKeyboardButton("🔄 ပြန်စစ်မယ်", callback_data="check_again")])
             
             reply_markup = InlineKeyboardMarkup(keyboard)
@@ -569,8 +563,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             sent_msg = await context.bot.send_document(chat_id=user_id, document=file_id, filename=file_name)
 
-        warning_text = "⚠️ ဤဖိုင်ကို 5 မိနစ်အတွင်း ဖျက်ပါမည်။ Saved Messages သို့ Forward လုပ်ပြီး သိမ်းဆည်းပါ။"
-        warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text)
+        # 🔥 သတိပေးစာ (ခင်ဗျား လိုချင်တဲ့အတိုင်း)
+        warning_text = (
+            "⚠️ ⚠️ ⚠️ အရေးကြီးပါတယ် ⚠️ ⚠️ ⚠️\n\n"
+            "👉ဤရုပ်ရှင်ဖိုင်များ/ဗီဒီယိုများကို 5 မိနစ်အတွင်း (မူပိုင်ခွင့်ပြဿနာများကြောင့်) ဖျက်ပါမည်။\n"
+            "👉ကျေးဇူးပြု၍ ဤဖိုင်များ/ဗီဒီယိုများအားလုံးကို သင်၏ Saved Messages များသို့ Forward လုပ်ပြီး ထိုနေရာတွင် ဇာတ်ကားအား ကြည့်ရှုပါ။\n"
+            "👉ကျွန်ုပ်၏ Channel ကို လာရောက်အားပေးမှုအတွက် ကျေးဇူးအထူးတင်ပါတယ် 🙏🙏🙏\n"
+            "👉Channel ရေရှည်တည်တံ့ဖို့အတွက် Support ပေးချင်ပါက Wave Pay (09767011991) ကို ကူညီနိုင်ပါတယ်။\n"
+            "👉Channel ကို Share ခြင်းဖြင့်လည်း ကူညီနိုင်ပါတယ်။\n"
+            "👉အားလုံးကို ကျေးဇူးတင်ပါတယ်။"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("🎬 Movie Channel", url="https://t.me/moviesandseriesforallwzn")],
+            [InlineKeyboardButton("🔞 Adult Channel", url="https://t.me/everyboyhobby")],
+            [InlineKeyboardButton("🎵 Music Channel", url="https://t.me/wznmusiclibary")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text, reply_markup=reply_markup)
+        
         context.application.create_task(delete_messages_after_delay(context, user_id, [sent_msg.message_id, warn_msg.message_id], 300))
         add_user(user_id)
         increment_requests()
@@ -588,19 +599,10 @@ async def check_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     
     if query.data == "check_again":
-        # User က Refresh နှိပ်လိုက်ရင် Channel တွေပြန်စစ်မယ်
-        # ဒါပေမယ့် payload ကို သိမ်းထားဖို့လိုတယ်
-        # ဒီနေရာမှာ ရိုးရိုးရှင်းရှင်းပြန်စစ်ဖို့ လုပ်မယ်
-        await query.edit_message_text("⏳ ပြန်စစ်နေပါပြီ...")
-        
-        # payload ကို ပြန်ရှာဖို့ နည်းလမ်းရှာရမယ်
-        # ဒါပေမယ့် ဒီနေရာမှာ ရိုးရိုးရှင်းရှင်းအနေနဲ့
-        # User ကို /start ပြန်နှိပ်ခိုင်းမယ်
+        # 🔥 ခင်ဗျား လိုချင်တဲ့ စာသားကို ပြန်ပို့မယ်
         await query.edit_message_text(
-            "🔄 ကျေးဇူးပြု၍ အောက်ပါလင့်ခ်ကို ထပ်မံနှိပ်ပါ။\n\n"
-            "သို့မဟုတ် ခလုတ်ကို ထပ်မံနှိပ်ပါ။"
+            "🔄 ကျေးဇူးပြု၍ ဇာတ်ကားပို့စ်အောက်ကလင့်ခ်ကို ထပ်မံနှိပ်ပြီးတော့ ဇာတ်ကားကိုရယူနိုင်ပါပြီ။"
         )
-        # ဒါမှမဟုတ် သူ့ကို ပြန်ညွှန်းဖို့ လုပ်နိုင်တယ်
 
 # ---------- Webhook ----------
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
