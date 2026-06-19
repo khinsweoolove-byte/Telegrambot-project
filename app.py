@@ -87,11 +87,11 @@ async def create_telegraph_page(title, content):
     except:
         return None
 
-# ---------- Telegram Config (ခိုင်မာစွာ ပြင်ဆင်ထားသည်) ----------
+# ---------- Telegram Config ----------
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 RAW_BOT_USERNAME = os.environ.get("BOT_USERNAME", "")
 
-# 🔥 အရေးကြီး: ရှေ့ဆုံးက @ နဲ့ နောက်ဆုံးက နေရာလွတ်တွေကို ဖယ်ရှားပါ
+# 🔥 ရှေ့ဆုံးက @ နဲ့ နောက်ဆုံးက နေရာလွတ်တွေကို ဖယ်ရှားပါ
 BOT_USERNAME = RAW_BOT_USERNAME.strip()
 if BOT_USERNAME.startswith("@"):
     BOT_USERNAME = BOT_USERNAME[1:]
@@ -431,22 +431,21 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_delete":
         await query.edit_message_text("🗑️ /delete <payload> ဖြင့် ဖိုင်ဖျက်နိုင်ပါသည်။")
 
-# ============================================================
-# ========== 🔥 START FUNCTION (ပြင်ဆင်ပြီး) ==========
-# ============================================================
+# ---------- START FUNCTION ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     logger.info(f"🟢 Start from User ID: {user_id}, Args: {context.args}")
 
     # ----- Admin အတွက် (Channel မစစ်ဘဲ တန်းပို့) -----
     if is_admin(user_id):
-        if context.args:
-            payload = context.args[0]
-            file_id, file_name = get_file(payload)
-            if not file_id:
-                await update.message.reply_text("❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။")
-                return
-            try:
+        try:
+            if context.args:
+                payload = context.args[0]
+                file_id, file_name = get_file(payload)
+                if not file_id:
+                    await update.message.reply_text("❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။")
+                    return
+                
                 if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
                     sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
                 elif file_name.endswith(('.mp4', '.mkv', '.avi')):
@@ -474,16 +473,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 warn_msg = await context.bot.send_message(chat_id=user_id, text=warning_text, reply_markup=reply_markup)
 
                 context.application.create_task(delete_messages_after_delay(context, user_id, [sent_msg.message_id, warn_msg.message_id], 300))
-            except Exception as e:
-                await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
-        else:
-            await admin_menu(update, context)
+            else:
+                await admin_menu(update, context)
+        except Exception as e:
+            logger.exception(f"Admin error: {e}")
+            await update.message.reply_text("❌ စနစ်တွင် ချို့ယွင်းချက်ရှိနေပါသည်။ ကျေးဇူးပြု၍ မိနစ်အနည်းငယ်အကြာ ပြန်ကြိုးစားပါ။")
         return
 
-    # ----- 🔥 သာမန် User အတွက် (ချန်နယ်စစ်မယ်) -----
-    # ဘယ်လိုအမှားမျိုးဖြစ်ဖြစ် "restricted access" မပေါ်အောင် try-except နဲ့ ဖုံးထားတယ်
+    # ----- သာမန် User အတွက် (Channel စစ်မယ်) -----
     try:
-        # Payload မပါဘဲ /start ရိုက်ရင် ကြိုဆိုစာ ပြမယ်
         if not context.args:
             await update.message.reply_text(
                 "🎬 ဖိုင်မှ Deep Link ဘော့\n\n"
@@ -496,7 +494,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         payload = context.args[0]
         file_id, file_name = get_file(payload)
         
-        # Payload မတွေ့ရင် ရှင်းရှင်းလင်းလင်း ပြန်ပို့မယ်
         if not file_id:
             await update.message.reply_text(
                 "❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။\n\n"
@@ -504,10 +501,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # Channel တွေ ဝင်ထားရဲ့လား စစ်မယ်
         ok, missing = await check_all_channels(user_id, context.bot)
         
-        # မဝင်သေးရင် ဝင်ဖို့ ပြောမယ်
         if not ok:
             msg = "🎬 ဖိုင်ရယူရန် အောက်ပါ Channel များအားလုံးကို ဝင်ထားပါ။\n\n"
             for ch in REQUIRED_CHANNELS:
@@ -518,7 +513,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(msg, disable_web_page_preview=True)
             return
 
-        # အားလုံးဝင်ထားပြီးရင် ဖိုင်ပို့မယ်
         if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
             sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
         elif file_name.endswith(('.mp4', '.mkv', '.avi')):
@@ -533,7 +527,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         increment_requests()
 
     except Exception as e:
-        # 🔥 အမှားတစ်ခုခုဖြစ်ရင် Bot ပြိုကျမသွားဘဲ ဒီစာသားကို ပြန်ပို့မယ်
         logger.exception(f"Error in start for user {user_id}: {e}")
         await update.message.reply_text(
             "❌ စနစ်တွင် ချို့ယွင်းချက်ရှိနေပါသည်။ ကျေးဇူးပြု၍ မိနစ်အနည်းငယ်အကြာ ပြန်ကြိုးစားပါ။\n\n"
