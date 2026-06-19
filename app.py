@@ -4,6 +4,7 @@ import threading
 import logging
 import secrets
 import re
+import sys
 from datetime import datetime
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
@@ -113,14 +114,16 @@ async def is_member_of_channel(user_id, channel_id, bot):
     try:
         member = await bot.get_chat_member(chat_id=channel_id, user_id=user_id)
         return member.status in ["member", "administrator", "creator"]
-    except:
+    except Exception as e:
+        logger.error(f"Channel check error for {channel_id}: {e}")
         return False
 
 async def check_all_channels(user_id, bot):
+    missing = []
     for ch in REQUIRED_CHANNELS:
         if not await is_member_of_channel(user_id, ch["id"], bot):
-            return False, ch
-    return True, None
+            missing.append(ch)
+    return len(missing) == 0, missing
 
 # ---------- Auto-delete helper ----------
 async def delete_messages_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_ids: list, delay_seconds: int = 300):
@@ -421,10 +424,11 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_delete":
         await query.edit_message_text("🗑️ /delete <payload> ဖြင့် ဖိုင်ဖျက်နိုင်ပါသည်။")
 
-# ---------- Start handler ----------
+# ---------- Start handler (ပြင်ဆင်ပြီး) ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
+    # ----- Admin အတွက် -----
     if is_admin(user_id):
         if context.args:
             payload = context.args[0]
@@ -433,6 +437,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။")
                 return
             try:
+                # Admin အတွက် Channel မစစ်ဘဲ တန်းပို့မယ်
                 if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
                     sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
                 elif file_name.endswith(('.mp4', '.mkv', '.avi')):
@@ -466,7 +471,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await admin_menu(update, context)
         return
 
-    # Non-admin users
+    # ----- သာမန် User အတွက် -----
     if not context.args:
         await update.message.reply_text(
             "🎬 ဖိုင်မှ Deep Link ဘော့\n\n"
@@ -479,18 +484,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = context.args[0]
     file_id, file_name = get_file(payload)
     if not file_id:
-        await update.message.reply_text("❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။")
+        await update.message.reply_text(
+            "❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။\n\n"
+            "ကျေးဇူးပြု၍ Channel ရှိ Post အသစ်များမှ လင့်ခ်ကို ပြန်လည်ရယူပါ။"
+        )
         return
 
-    ok, missing_ch = await check_all_channels(user_id, context.bot)
+    # Channel စစ်မယ်
+    ok, missing = await check_all_channels(user_id, context.bot)
     if not ok:
         msg = "🎬 ဖိုင်ရယူရန် အောက်ပါ Channel များအားလုံးကို ဝင်ထားပါ။\n\n"
         for ch in REQUIRED_CHANNELS:
-            status = "✅" if ch["id"] != missing_ch["id"] else "❌"
-            msg += f"{status} {ch['name']}: [ဝင်ရန်]({ch['invite']})\n"
-        await update.message.reply_text(msg)
+            if ch in missing:
+                msg += f"❌ {ch['name']}: [ဝင်ရန်]({ch['invite']})\n"
+            else:
+                msg += f"✅ {ch['name']}\n"
+        await update.message.reply_text(msg, disable_web_page_preview=True)
         return
 
+    # Channel အားလုံးဝင်ထားပြီးရင် ဖိုင်ပို့မယ်
     try:
         if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
             sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
