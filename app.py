@@ -89,10 +89,12 @@ async def create_telegraph_page(title, content):
 
 # ---------- Telegram Config ----------
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-BOT_USERNAME = "WZNmoviefilsend_bot"  # @ မပါဘူး
+BOT_USERNAME = os.environ.get("BOT_USERNAME", "").strip()
+if BOT_USERNAME.startswith("@"):
+    BOT_USERNAME = BOT_USERNAME[1:]
 
-if not TOKEN:
-    logger.error("TELEGRAM_TOKEN not set")
+if not TOKEN or not BOT_USERNAME:
+    logger.error("TELEGRAM_TOKEN and BOT_USERNAME required")
     sys.exit(1)
 
 logger.info(f"🔧 Using Bot Username: @{BOT_USERNAME}")
@@ -101,18 +103,63 @@ ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_ID", "").split(",") i
 logger.info(f"👑 Admin IDs: {ADMIN_IDS}")
 
 # ============================================================
-# 🔥🔥🔥 အရေးကြီး - အောက်ပါ ID တွေကို ခင်ဗျား ရယူထားတဲ့ ID အသစ်တွေနဲ့ အစားထိုးပါ
+# 🔥 REQUIRED_CHANNELS ကို Environment Variable ကနေ ယူမယ်
 # ============================================================
-REQUIRED_CHANNELS = [
-    {"id": "-1003753299714", "name": "🎬 ဇာတ်ကားချန်နယ် (ပင်မ)", "invite": "https://t.me/wznmoviescollector"},
-    {"id": "-1003899625672", "name": "🎬 ဇာတ်ကားချန်နယ် (အရံ)", "invite": "https://t.me/moviesandseriesforallwzn"},
-    {"id": "-1003792838735", "name": "🔞 လူကြီးများအတွက် သီးသန့်ချန်နယ်", "invite": "https://t.me/everyboyhobby"},
-    {"id": "-1003785717514", "name": "🎵 မြန်မာသီချင်းချန်နယ်", "invite": "https://t.me/wznmusiclibary"}
-]
+def get_required_channels():
+    channels = []
+    
+    # ၁။ REQUIRED_CHANNELS ကနေ ID တွေယူမယ်
+    raw_ids = os.environ.get("REQUIRED_CHANNELS", "")
+    if raw_ids:
+        ids = [x.strip() for x in raw_ids.split(",") if x.strip()]
+        logger.info(f"📌 REQUIRED_CHANNELS from env: {ids}")
+    else:
+        # မရှိရင် ပုံသေ ID တွေသုံးမယ်
+        ids = ["-1003753299714", "-1003899625672", "-1003792838735", "-1003785717514"]
+        logger.info(f"📌 Using default channel IDs: {ids}")
+    
+    # ၂။ CHANNEL_INVITE_LINKS ကနေ လင့်ခ်တွေယူမယ်
+    invite_links_raw = os.environ.get("CHANNEL_INVITE_LINKS", "")
+    if invite_links_raw:
+        invite_links = [x.strip() for x in invite_links_raw.split(",") if x.strip()]
+        logger.info(f"📌 CHANNEL_INVITE_LINKS from env: {invite_links}")
+    else:
+        # မရှိရင် ပုံသေ လင့်ခ်တွေသုံးမယ်
+        invite_links = [
+            "https://t.me/wznmoviescollector",
+            "https://t.me/moviesandseriesforallwzn",
+            "https://t.me/everyboyhobby",
+            "https://t.me/wznmusiclibary"
+        ]
+        logger.info(f"📌 Using default invite links: {invite_links}")
+    
+    # ၃။ Channel အမည်တွေ သတ်မှတ်မယ်
+    names = [
+        "🎬 ဇာတ်ကားချန်နယ် (ပင်မ)",
+        "🎬 ဇာတ်ကားချန်နယ် (အရံ)",
+        "🔞 လူကြီးများအတွက် သီးသန့်ချန်နယ်",
+        "🎵 မြန်မာသီချင်းချန်နယ်"
+    ]
+    
+    # ၄။ အားလုံးကို ပေါင်းပြီး စာရင်းဆောက်မယ်
+    for i in range(min(len(ids), len(invite_links), len(names))):
+        channels.append({
+            "id": ids[i],
+            "name": names[i] if i < len(names) else f"Channel {i+1}",
+            "invite": invite_links[i] if i < len(invite_links) else f"https://t.me/channel{i+1}"
+        })
+    
+    logger.info(f"✅ Final REQUIRED_CHANNELS: {channels}")
+    return channels
+
+REQUIRED_CHANNELS = get_required_channels()
 
 def is_admin(user_id):
     result = user_id in ADMIN_IDS
-    logger.info(f"🔍 User {user_id} is admin? {result}")
+    if result:
+        logger.info(f"✅ User {user_id} is ADMIN")
+    else:
+        logger.info(f"❌ User {user_id} is NOT admin")
     return result
 
 def generate_payload():
@@ -121,7 +168,9 @@ def generate_payload():
 async def is_member_of_channel(user_id, channel_id, bot):
     try:
         member = await bot.get_chat_member(chat_id=channel_id, user_id=user_id)
-        return member.status in ["member", "administrator", "creator"]
+        is_member = member.status in ["member", "administrator", "creator"]
+        logger.info(f"User {user_id} in channel {channel_id}: {is_member} (status: {member.status})")
+        return is_member
     except Exception as e:
         logger.error(f"Channel check error for {channel_id}: {e}")
         return False
@@ -512,8 +561,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         if not context.args:
+            # Deep Link မပါဘဲ /start ရိုက်ရင် ကြိုဆိုစာ
             await update.message.reply_text(
-                "🎬 ဖိုင်မှ Deep Link ဘော့\n\n"
+                "🎬 **ဖိုင်မှ Deep Link ဘော့**\n\n"
                 "အဒ်မင်က ဖိုင်တစ်ခုခု ပို့လိုက်လျှင် Deep Link ထုတ်ပေးပါမည်။\n"
                 "အဆိုပါလင့်ခ်ကို နှိပ်ပါက လိုအပ်သော Channel များအားလုံးဝင်ပြီးမှသာ ဖိုင်ကိုရယူနိုင်ပါသည်။\n"
                 "ဖိုင်ကို 5 မိနစ်အကြာတွင် အလိုအလျောက် ဖျက်ပစ်ပါမည်။"
@@ -533,15 +583,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ok, missing = await check_all_channels(user_id, context.bot)
         
         if not ok:
+            # 🔥 Inline Keyboard နဲ့ ပြန်ပြမယ်
             msg = "🎬 ဖိုင်ရယူရန် အောက်ပါ Channel များအားလုံးကို ဝင်ထားပါ။\n\n"
+            keyboard = []
             for ch in REQUIRED_CHANNELS:
                 if ch in missing:
-                    msg += f"❌ {ch['name']}: [ဝင်ရန်]({ch['invite']})\n"
+                    msg += f"❌ {ch['name']}\n"
+                    keyboard.append([InlineKeyboardButton(f"❌ {ch['name']} ဝင်ရန်", url=ch['invite'])])
                 else:
                     msg += f"✅ {ch['name']}\n"
-            await update.message.reply_text(msg, disable_web_page_preview=True)
+            
+            # ✅ အားလုံးဝင်ပြီးရင် ပြန်နှိပ်ဖို့ ခလုတ်ထည့်မယ်
+            keyboard.append([InlineKeyboardButton("🔄 အားလုံးဝင်ပြီးပါပြီ၊ ထပ်မံစစ်ဆေးမည်", callback_data=f"retry_{payload}")])
+            
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(msg, reply_markup=reply_markup, disable_web_page_preview=True)
             return
 
+        # Channel အားလုံးဝင်ထားပြီးရင် ဖိုင်ပို့မယ်
         if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
             sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
         elif file_name.endswith(('.mp4', '.mkv', '.avi')):
@@ -560,6 +619,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "❌ စနစ်တွင် ချို့ယွင်းချက်ရှိနေပါသည်။ ကျေးဇူးပြု၍ မိနစ်အနည်းငယ်အကြာ ပြန်ကြိုးစားပါ။"
         )
+
+# ---------- Retry Callback ----------
+async def retry_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    
+    # payload ကို callback data ကနေ ယူမယ်
+    data = query.data
+    if data.startswith("retry_"):
+        payload = data[6:]  # "retry_" ကိုဖယ်
+        # ပြန်စစ်ပြီး start ကို ပြန်ခေါ်မယ်
+        context.args = [payload]
+        await start(update, context)
 
 # ---------- Webhook ----------
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
@@ -595,7 +668,8 @@ telegram_app.add_handler(CommandHandler("broadcast", broadcast_command))
 telegram_app.add_handler(CommandHandler("cancel", cancel_command))
 telegram_app.add_handler(CommandHandler("delete", delete_command))
 telegram_app.add_handler(CommandHandler("menu", admin_menu))
-telegram_app.add_handler(CommandHandler("getid", get_channel_id))  # 🔥 အသစ်ထည့်ထားတယ်
+telegram_app.add_handler(CommandHandler("getid", get_channel_id))
+telegram_app.add_handler(CallbackQueryHandler(retry_callback, pattern="retry_"))
 telegram_app.add_handler(CallbackQueryHandler(menu_callback, pattern="cmd_"))
 telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
 
