@@ -3,7 +3,7 @@ import asyncio
 import threading
 import logging
 import secrets
-import re
+import sys
 from datetime import datetime
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
@@ -15,7 +15,7 @@ from telegram.helpers import create_deep_linked_url
 from pymongo import MongoClient
 from telegraph import Telegraph
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -89,38 +89,61 @@ async def create_telegraph_page(title, content):
 
 # ---------- Telegram Config ----------
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
-BOT_USERNAME = os.environ.get("BOT_USERNAME")
-if not TOKEN or not BOT_USERNAME:
-    logger.error("TELEGRAM_TOKEN and BOT_USERNAME required")
+BOT_USERNAME = "WZNmoviefilsend_bot"
+
+if not TOKEN:
+    logger.error("TELEGRAM_TOKEN not set")
     sys.exit(1)
 
-ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_ID", "").split(",") if x.strip()]
+ADMIN_IDS = []
+raw_admin_ids = os.environ.get("ADMIN_ID", "")
+if raw_admin_ids:
+    ADMIN_IDS = [int(x.strip()) for x in raw_admin_ids.split(",") if x.strip()]
+    logger.info(f"👑 Admin IDs: {ADMIN_IDS}")
+else:
+    logger.warning("⚠️ No ADMIN_ID set!")
 
+logger.info(f"🔧 Using Bot Username: @{BOT_USERNAME}")
+
+# 🔥 ဒီနေရာမှာ Channel ID တွေကို Integer (int) အနေနဲ့ သတ်မှတ်ပါ
 REQUIRED_CHANNELS = [
-    {"id": "-1003753299714", "name": "🎬 ဇာတ်ကားချန်နယ် (ပင်မ)", "invite": "https://t.me/wznmoviescollector"},
-    {"id": "-1003899625672", "name": "🎬 ဇာတ်ကားချန်နယ် (အရံ)", "invite": "https://t.me/moviesandseriesforallwzn"},
-    {"id": "-1003792838735", "name": "🔞 လူကြီးများအတွက် သီးသန့်ချန်နယ်", "invite": "https://t.me/everyboyhobby"},
-    {"id": "-1003785717514", "name": "🎵 မြန်မာသီချင်းချန်နယ်", "invite": "https://t.me/wznmusiclibary"}
+    {"id": -1003753299714, "name": "🎬 ဇာတ်ကားချန်နယ် (ပင်မ)", "invite": "https://t.me/wznmoviescollector"},
+    {"id": -1003899625672, "name": "🎬 ဇာတ်ကားချန်နယ် (အရံ)", "invite": "https://t.me/moviesandseriesforallwzn"},
+    {"id": -1003792838735, "name": "🔞 လူကြီးများအတွက် သီးသန့်ချန်နယ်", "invite": "https://t.me/everyboyhobby"},
+    {"id": -1003785717514, "name": "🎵 မြန်မာသီချင်းချန်နယ်", "invite": "https://t.me/wznmusiclibary"}
 ]
 
 def is_admin(user_id):
-    return user_id in ADMIN_IDS
+    result = user_id in ADMIN_IDS
+    if result:
+        logger.info(f"✅ User {user_id} is ADMIN")
+    else:
+        logger.info(f"❌ User {user_id} is NOT admin")
+    return result
 
 def generate_payload():
     return secrets.token_urlsafe(12)
 
 async def is_member_of_channel(user_id, channel_id, bot):
     try:
+        logger.debug(f"Checking channel {channel_id} for user {user_id}")
         member = await bot.get_chat_member(chat_id=channel_id, user_id=user_id)
-        return member.status in ["member", "administrator", "creator"]
-    except:
+        is_member = member.status in ["member", "administrator", "creator"]
+        logger.info(f"User {user_id} in channel {channel_id}: {is_member} (status: {member.status})")
+        return is_member
+    except Exception as e:
+        logger.error(f"Channel check error for {channel_id}: {e}")
         return False
 
 async def check_all_channels(user_id, bot):
+    missing = []
     for ch in REQUIRED_CHANNELS:
         if not await is_member_of_channel(user_id, ch["id"], bot):
-            return False, ch
-    return True, None
+            missing.append(ch)
+            logger.warning(f"User {user_id} is NOT in channel {ch['id']} ({ch['name']})")
+        else:
+            logger.info(f"User {user_id} IS in channel {ch['id']} ({ch['name']})")
+    return len(missing) == 0, missing
 
 # ---------- Auto-delete helper ----------
 async def delete_messages_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_ids: list, delay_seconds: int = 300):
@@ -136,7 +159,7 @@ async def delete_messages_after_delay(context: ContextTypes.DEFAULT_TYPE, chat_i
 POST_PHOTO, POST_MOVIE = range(2)
 POST_TEXT_PHOTO, POST_TEXT_CAPTION, POST_TEXT_MOVIE = range(10, 13)
 
-# ---------- /post (multiple photos, "aa" to finish) ----------
+# ---------- /post ----------
 async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
@@ -154,11 +177,9 @@ async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['waiting_for_photos'] = False
         await update.message.reply_text("🎬 ယခု ရုပ်ရှင်ဖိုင် (video or document) ကို ပို့ပေးပါ။")
         return POST_MOVIE
-    
     if not update.message.photo:
         await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။ ပြီးပါက 'aa' ဟု ရိုက်ပါ။")
         return POST_PHOTO
-    
     context.user_data['photos'].append(update.message.photo[-1].file_id)
     if update.message.caption and len(context.user_data.get('photos', [])) == 1:
         context.user_data['custom_caption'] = update.message.caption
@@ -187,6 +208,8 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
+    
+    logger.info(f"✅ NEW POST DEEP LINK: {deep_link}")
 
     caption = context.user_data.get('custom_caption', "🎬 ရုပ်ရှင်အသစ်\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။")
     keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
@@ -194,7 +217,6 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    # Send all photos as media group
     media_group = [InputMediaPhoto(media=photo) for photo in photos]
     try:
         await message.reply_media_group(media=media_group)
@@ -213,7 +235,7 @@ async def cancel_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- /post_text (multiple photos, "aa" to finish) ----------
+# ---------- /post_text ----------
 async def post_text_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update.effective_user.id):
         await update.message.reply_text("⛔ အဒ်မင်များသာ အသုံးပြုနိုင်ပါသည်။")
@@ -231,11 +253,9 @@ async def post_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['waiting_for_photos'] = False
         await update.message.reply_text("✍️ ယခု ဇာတ်ကားအကြောင်း စာသား (ဇာတ်ညွှန်း) ကို ပို့ပေးပါ။")
         return POST_TEXT_CAPTION
-    
     if not update.message.photo:
         await update.message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံတစ်ပုံ ပို့ပေးပါ။ ပြီးပါက 'aa' ဟု ရိုက်ပါ။")
         return POST_TEXT_PHOTO
-    
     context.user_data['photos'].append(update.message.photo[-1].file_id)
     await update.message.reply_text(f"✅ ပုံ #{len(context.user_data['photos'])} လက်ခံရရှိပါပြီ။ ဆက်ပို့နိုင်ပါသည်။")
     return POST_TEXT_PHOTO
@@ -280,6 +300,8 @@ async def post_text_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
+    
+    logger.info(f"✅ NEW POST_TEXT DEEP LINK: {deep_link}")
 
     if telegraph_url:
         preview = caption_text[:300] + "..." if len(caption_text) > 300 else caption_text
@@ -310,7 +332,7 @@ async def cancel_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     return ConversationHandler.END
 
-# ---------- Standalone file upload -> Deep Link ----------
+# ---------- Standalone file upload ----------
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not is_admin(user_id):
@@ -337,6 +359,7 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
+    logger.info(f"✅ STANDALONE DEEP LINK: {deep_link}")
     await message.reply_text(f"🔗 သင်၏ Deep Link အဆင်သင့်ဖြစ်ပါပြီ။\n\n{deep_link}\n\n{file_name}")
 
 # ---------- Admin commands ----------
@@ -421,11 +444,17 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_delete":
         await query.edit_message_text("🗑️ /delete <payload> ဖြင့် ဖိုင်ဖျက်နိုင်ပါသည်။")
 
-# ---------- Start handler ----------
+# ============================================================
+# ========== 🔥 START (ပြင်ဆင်ပြီး) ==========
+# ============================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    logger.info(f"🟢 Start from User ID: {user_id}, Args: {context.args}")
+    logger.info(f"🔍 Is user admin? {is_admin(user_id)}")
 
+    # ----- Admin ဖြစ်ရင် Channel မစစ်ဘဲ ကျော်ပါ -----
     if is_admin(user_id):
+        logger.info(f"✅ User {user_id} is admin - skipping channel check")
         if context.args:
             payload = context.args[0]
             file_id, file_name = get_file(payload)
@@ -466,32 +495,43 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await admin_menu(update, context)
         return
 
-    # Non-admin users
-    if not context.args:
-        await update.message.reply_text(
-            "🎬 ဖိုင်မှ Deep Link ဘော့\n\n"
-            "အဒ်မင်က ဖိုင်တစ်ခုခု ပို့လိုက်လျှင် Deep Link ထုတ်ပေးပါမည်။\n"
-            "အဆိုပါလင့်ခ်ကို နှိပ်ပါက လိုအပ်သော Channel များအားလုံးဝင်ပြီးမှသာ ဖိုင်ကိုရယူနိုင်ပါသည်။\n"
-            "ဖိုင်ကို 5 မိနစ်အကြာတွင် အလိုအလျောက် ဖျက်ပစ်ပါမည်။"
-        )
-        return
-
-    payload = context.args[0]
-    file_id, file_name = get_file(payload)
-    if not file_id:
-        await update.message.reply_text("❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။")
-        return
-
-    ok, missing_ch = await check_all_channels(user_id, context.bot)
-    if not ok:
-        msg = "🎬 ဖိုင်ရယူရန် အောက်ပါ Channel များအားလုံးကို ဝင်ထားပါ။\n\n"
-        for ch in REQUIRED_CHANNELS:
-            status = "✅" if ch["id"] != missing_ch["id"] else "❌"
-            msg += f"{status} {ch['name']}: [ဝင်ရန်]({ch['invite']})\n"
-        await update.message.reply_text(msg)
-        return
-
+    # ----- သာမန် User အတွက် (Channel စစ်မယ်) -----
+    logger.info(f"ℹ️ User {user_id} is NOT admin - checking channels")
+    
     try:
+        if not context.args:
+            await update.message.reply_text(
+                "🎬 ဖိုင်မှ Deep Link ဘော့\n\n"
+                "အဒ်မင်က ဖိုင်တစ်ခုခု ပို့လိုက်လျှင် Deep Link ထုတ်ပေးပါမည်။\n"
+                "အဆိုပါလင့်ခ်ကို နှိပ်ပါက လိုအပ်သော Channel များအားလုံးဝင်ပြီးမှသာ ဖိုင်ကိုရယူနိုင်ပါသည်။\n"
+                "ဖိုင်ကို 5 မိနစ်အကြာတွင် အလိုအလျောက် ဖျက်ပစ်ပါမည်။"
+            )
+            return
+
+        payload = context.args[0]
+        file_id, file_name = get_file(payload)
+        
+        if not file_id:
+            await update.message.reply_text(
+                "❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။\n\n"
+                "ကျေးဇူးပြု၍ Channel ရှိ Post အသစ်များမှ လင့်ခ်ကို ပြန်လည်ရယူပါ။"
+            )
+            return
+
+        # 🔥 Channel Check ကို ပိုမိုကောင်းမွန်အောင်လုပ်ထားတယ်
+        ok, missing = await check_all_channels(user_id, context.bot)
+        
+        if not ok:
+            msg = "🎬 ဖိုင်ရယူရန် အောက်ပါ Channel များအားလုံးကို ဝင်ထားပါ။\n\n"
+            for ch in REQUIRED_CHANNELS:
+                if ch in missing:
+                    msg += f"❌ {ch['name']}: [ဝင်ရန်]({ch['invite']})\n"
+                else:
+                    msg += f"✅ {ch['name']}\n"
+            await update.message.reply_text(msg, disable_web_page_preview=True)
+            return
+
+        # Channel အားလုံးဝင်ထားပြီးရင် ဖိုင်ပို့မယ်
         if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
             sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
         elif file_name.endswith(('.mp4', '.mkv', '.avi')):
@@ -504,18 +544,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.application.create_task(delete_messages_after_delay(context, user_id, [sent_msg.message_id, warn_msg.message_id], 300))
         add_user(user_id)
         increment_requests()
-    except Exception as e:
-        await update.message.reply_text(f"❌ ဖိုင်ပို့ရာတွင် အမှားရှိသည်: {e}")
 
-# ---------- Webhook setup ----------
+    except Exception as e:
+        logger.exception(f"Error in start for user {user_id}: {e}")
+        await update.message.reply_text(
+            "❌ စနစ်တွင် ချို့ယွင်းချက်ရှိနေပါသည်။ ကျေးဇူးပြု၍ မိနစ်အနည်းငယ်အကြာ ပြန်ကြိုးစားပါ။"
+        )
+
+# ---------- Webhook ----------
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL")
 if not WEBHOOK_URL:
     logger.error("WEBHOOK_URL not set")
     sys.exit(1)
 
+logger.info(f"🌐 Webhook URL: {WEBHOOK_URL}")
+
 telegram_app = Application.builder().token(TOKEN).build()
 
-# Conversation handlers
 telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post', post_start)],
     states={
@@ -534,7 +579,6 @@ telegram_app.add_handler(ConversationHandler(
     fallbacks=[CommandHandler('cancel', cancel_post_text)],
 ))
 
-# Command handlers
 telegram_app.add_handler(CommandHandler("start", start))
 telegram_app.add_handler(CommandHandler("stats", stats_command))
 telegram_app.add_handler(CommandHandler("broadcast", broadcast_command))
@@ -549,6 +593,7 @@ def webhook():
     try:
         data = request.get_json(force=True)
         update = Update.de_json(data, telegram_app.bot)
+        logger.info(f"📨 Webhook received update")
         asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), loop)
         return "ok", 200
     except Exception as e:
@@ -560,13 +605,13 @@ def start_flask():
     app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 async def set_webhook():
+    await telegram_app.initialize()
     await telegram_app.bot.set_webhook(WEBHOOK_URL)
-    logger.info(f"Webhook set to {WEBHOOK_URL}")
+    logger.info(f"✅ Webhook set to {WEBHOOK_URL}")
 
 if __name__ == "__main__":
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(telegram_app.initialize())
     loop.run_until_complete(set_webhook())
     threading.Thread(target=start_flask, daemon=True).start()
     try:
