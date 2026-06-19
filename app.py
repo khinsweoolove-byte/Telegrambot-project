@@ -91,6 +91,10 @@ async def create_telegraph_page(title, content):
 # ---------- Telegram Config ----------
 TOKEN = os.environ.get("TELEGRAM_TOKEN")
 BOT_USERNAME = os.environ.get("BOT_USERNAME")
+
+# !! အရေးကြီး !! BOT_USERNAME က @ မပါဘဲ အတိအကျထားပါ
+# ဥပမာ - BOT_USERNAME = "WZNmoviefilsend_bot"
+
 if not TOKEN or not BOT_USERNAME:
     logger.error("TELEGRAM_TOKEN and BOT_USERNAME required")
     sys.exit(1)
@@ -424,11 +428,11 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "cmd_delete":
         await query.edit_message_text("🗑️ /delete <payload> ဖြင့် ဖိုင်ဖျက်နိုင်ပါသည်။")
 
-# ---------- Start handler (ပြင်ဆင်ပြီး) ----------
+# ---------- ⭐ START HANDLER (ပြင်ဆင်ပြီး) ----------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
 
-    # ----- Admin အတွက် -----
+    # ----- Admin အတွက် (Channel မစစ်ဘဲ တန်းပို့) -----
     if is_admin(user_id):
         if context.args:
             payload = context.args[0]
@@ -437,7 +441,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("❌ လင့်ခ် မမှန်ကန်ပါ သို့မဟုတ် သက်တမ်းကုန်သွားပါပြီ။")
                 return
             try:
-                # Admin အတွက် Channel မစစ်ဘဲ တန်းပို့မယ်
                 if file_name.endswith(('.jpg', '.jpeg', '.png', '.gif')):
                     sent_msg = await context.bot.send_photo(chat_id=user_id, photo=file_id, caption=f"📂 {file_name}")
                 elif file_name.endswith(('.mp4', '.mkv', '.avi')):
@@ -471,7 +474,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await admin_menu(update, context)
         return
 
-    # ----- သာမန် User အတွက် -----
+    # ----- သာမန် User အတွက် (Channel စစ်မယ်) -----
     if not context.args:
         await update.message.reply_text(
             "🎬 ဖိုင်မှ Deep Link ဘော့\n\n"
