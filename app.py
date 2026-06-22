@@ -462,7 +462,7 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("🗑️ /delete <payload> ဖြင့် ဖိုင်ဖျက်နိုင်ပါသည်။")
 
 # ============================================================
-# ========== START FUNCTION (ပြင်ဆင်ပြီး) ==========
+# ========== START FUNCTION ==========
 # ============================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -485,7 +485,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     sent_msg = await context.bot.send_document(chat_id=user_id, document=file_id, filename=file_name)
 
-                # 🔥 သတိပေးစာ (ခင်ဗျား လိုချင်တဲ့အတိုင်း)
+                # 🔥 သတိပေးစာ
                 warning_text = (
                     "⚠️ ⚠️ ⚠️ အရေးကြီးပါတယ် ⚠️ ⚠️ ⚠️\n\n"
                     "👉ဤရုပ်ရှင်ဖိုင်များ/ဗီဒီယိုများကို 5 မိနစ်အတွင်း (မူပိုင်ခွင့်ပြဿနာများကြောင့်) ဖျက်ပါမည်။\n"
@@ -563,7 +563,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             sent_msg = await context.bot.send_document(chat_id=user_id, document=file_id, filename=file_name)
 
-        # 🔥 သတိပေးစာ (ခင်ဗျား လိုချင်တဲ့အတိုင်း)
+        # 🔥 သတိပေးစာ
         warning_text = (
             "⚠️ ⚠️ ⚠️ အရေးကြီးပါတယ် ⚠️ ⚠️ ⚠️\n\n"
             "👉ဤရုပ်ရှင်ဖိုင်များ/ဗီဒီယိုများကို 5 မိနစ်အတွင်း (မူပိုင်ခွင့်ပြဿနာများကြောင့်) ဖျက်ပါမည်။\n"
@@ -599,7 +599,6 @@ async def check_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = query.from_user.id
     
     if query.data == "check_again":
-        # 🔥 ခင်ဗျား လိုချင်တဲ့ စာသားကို ပြန်ပို့မယ်
         await query.edit_message_text(
             "🔄 ကျေးဇူးပြု၍ ဇာတ်ကားပို့စ်အောက်ကလင့်ခ်ကို ထပ်မံနှိပ်ပြီးတော့ ဇာတ်ကားကိုရယူနိုင်ပါပြီ။"
         )
@@ -642,6 +641,14 @@ telegram_app.add_handler(CallbackQueryHandler(menu_callback, pattern="cmd_"))
 telegram_app.add_handler(CallbackQueryHandler(check_callback, pattern="check_again"))
 telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
 
+# ============================================================
+# 🔥 **ဒီနေရာမှာ Root Route ထည့်ပေးလိုက်တယ်** 🔥
+# ============================================================
+@app.route('/', methods=['GET'])
+def home():
+    return "Bot is running!", 200
+
+# ============================================================
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
