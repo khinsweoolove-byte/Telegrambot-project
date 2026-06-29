@@ -229,7 +229,7 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"✅ NEW POST DEEP LINK: {deep_link}")
 
     caption = context.user_data.get('custom_caption', "🎬 ရုပ်ရှင်အသစ်\n\nရုပ်ရှင်ရယူရန် အောက်ပါခလုတ်ကို နှိပ်ပါ။")
-    keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်", url=deep_link)]]
+    keyboard = [[InlineKeyboardButton("🎬 ရုပ်ရှင်ရယူရန်(‌အောက်က ချန်နယ်တွေကိုဝင်ထားပါ)", url=deep_link)]]
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
     reply_markup = InlineKeyboardMarkup(keyboard)
