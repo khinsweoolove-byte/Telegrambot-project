@@ -2,14 +2,11 @@ import os
 import asyncio
 import threading
 import logging
-import math
 import secrets
 import sys
 import time
 from datetime import datetime
-from io import BytesIO
 from flask import Flask, request
-from PIL import Image, ImageOps
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, LinkPreviewOptions
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters, ContextTypes,
@@ -255,9 +252,12 @@ async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံ ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_PHOTO
     photos = context.user_data.setdefault('photos', [])
-    for size in message.photo:
-        photos.append(size.file_id)
-    if message.caption and len(photos) == len(message.photo):
+    is_first = not photos
+    # message.photo က ပုံတစ်ပုံရဲ့ အရွယ်အစားအမျိုးအစားတွေ ဖြစ်ပါတယ်။
+    # အားလုံးကို ပို့ပေးရင် ပုံတစ်ခုက ပုံ ၃-၅ ခုအဖြစ် ပို့သွားမှာမို့
+    # အကြီးဆုံးတစ်ခုတည်းကိုသာ ယူပါမယ်။
+    photos.append(message.photo[-1].file_id)
+    if is_first and message.caption:
         context.user_data['custom_caption'] = message.caption
     await message.reply_text(
         f"✅ ပုံ {len(photos)} လက်ခံရရှိပါပြီ။ ဆက်ပို့နိုင်ပါသည်။"
@@ -325,94 +325,6 @@ async def send_photo_batches(message, photos):
                     logger.error(f"reply_photo failed: {pe}")
 
 
-COLLAGE_MAX_SIDE = 2560
-COLLAGE_TILE = 480
-COLLAGE_GAP = 10
-COLLAGE_MAX_COLUMNS = 10
-
-
-def _grid_shape(count):
-    """ပုံအများကြီးအတွက် ချိုမြေ့တဲ့ ကွက်အကျင်း ပုံစံ ရွေးပါမယ်။
-    ကျဉ်းပြီး ရှည်လွန်တဲ့ ပုံအတွက် ပုံပိုကျဉ်းလောက် မဖြစ်အောင် ကွက်ယူရိုးက်ပေးတယ်။"""
-    if count <= 1:
-        return 1, 1
-    if count == 2:
-        return 2, 1
-    columns = min(COLLAGE_MAX_COLUMNS, math.ceil(math.sqrt(count)))
-    rows = math.ceil(count / columns)
-    while columns < count and rows > columns * 2:
-        columns += 1
-        rows = math.ceil(count / columns)
-    return columns, rows
-
-
-def _collage_geometry(count):
-    """(columns, rows, tile, gap, width, height) — Telegram 2560 ကန့်သတ်မှုကို မကျော်စေဘဲ တွက်ခြင်း။"""
-    columns, rows = _grid_shape(count)
-    width = columns * COLLAGE_TILE + (columns - 1) * COLLAGE_GAP
-    height = rows * COLLAGE_TILE + (rows - 1) * COLLAGE_GAP
-    scale = min(1.0, COLLAGE_MAX_SIDE / max(width, height))
-    tile, gap = COLLAGE_TILE, COLLAGE_GAP
-    if scale < 1.0:
-        tile = int(COLLAGE_TILE * scale)
-        gap = max(1, int(COLLAGE_GAP * scale))
-        width = columns * tile + (columns - 1) * gap
-        height = rows * tile + (rows - 1) * gap
-    return columns, rows, tile, gap, width, height
-
-
-async def build_collage(photos, bot):
-    """ပုံအပြားလုံးကို grid ပုံတစ်ခုအဖြစ် ပေါ်ထဲဆက်ပြီး JPEG bytes ပြန်ပေးပါမယ်။
-    album မှာ inline keyboard မချိတ်လို့ရတဲ့အတွက် caption + button တွေနဲ့
-    တစ်ခါတည်း ပို့ချင်ရင် ပုံပေါ်ထဲမှာ ဆက်ထားရမယ်။"""
-    tiles = []
-    for file_id in photos:
-        try:
-            telegram_file = await bot.get_file(file_id)
-            data = await telegram_file.download_as_bytearray()
-            image = Image.open(BytesIO(bytes(data)))
-            tiles.append(ImageOps.fit(image.convert("RGB"), (COLLAGE_TILE, COLLAGE_TILE)))
-        except Exception as e:
-            logger.error(f"Collage tile failed for {file_id}: {e}")
-    if not tiles:
-        raise RuntimeError("collage has no usable tiles")
-
-    columns, rows, tile, gap, width, height = _collage_geometry(len(tiles))
-    if tile != COLLAGE_TILE:
-        tiles = [t.resize((tile, tile), Image.LANCZOS) for t in tiles]
-
-    canvas = Image.new("RGB", (width, height), (255, 255, 255))
-    for index, tile_image in enumerate(tiles):
-        x = (index % columns) * (tile + gap)
-        y = (index // columns) * (tile + gap)
-        canvas.paste(tile_image, (x, y))
-
-    buffer = BytesIO()
-    canvas.save(buffer, format="JPEG", quality=88, optimize=True)
-    buffer.seek(0)
-    return buffer
-
-
-async def send_poster_with_caption(message, photos, caption, keyboard, bot):
-    """ပုံအပြားလုံး + caption + button တွေကို message ၁ ခုတည်း ပို့မယ်။
-    collage မဖြစ်ခဲ့ရင် album ပုံစံနဲ့ ပြန်ကျသွားမယ် (post မပျောက်စေဘူး)။"""
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    if photos:
-        try:
-            collage = await build_collage(photos, bot)
-            await message.reply_photo(
-                photo=collage,
-                caption=caption[:1024],
-                reply_markup=reply_markup,
-            )
-            return True
-        except Exception as e:
-            logger.error(f"Collage send failed, falling back to album: {e}")
-            await send_photo_batches(message, photos)
-    await message.reply_text(text=caption, reply_markup=reply_markup)
-    return False
-
-
 async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ပိုစတာ + ရုပ်ရှင်ဖိုင် + caption အားလုံး ရှိပြီးပြီဆိုတဲ့အခါ ခေါ်မယ်။"""
     message = update.message
@@ -430,13 +342,13 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
 
-    await send_poster_with_caption(
-        message,
-        context.user_data['photos'],
-        caption,
-        keyboard,
-        context.bot,
+    await send_photo_batches(message, context.user_data['photos'])
+
+    await message.reply_text(
+        text=caption,
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
+    await message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -508,9 +420,9 @@ async def post_text_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await message.reply_text("ကျေးဇူးပြု၍ ဓာတ်ပုံ ပုံတစ်ပုံ ပို့ပေးပါ။")
         return POST_TEXT_PHOTO
     photos = context.user_data.setdefault('photos', [])
-    for size in message.photo:
-        photos.append(size.file_id)
-    if message.caption and len(photos) == len(message.photo):
+    is_first = not photos
+    photos.append(message.photo[-1].file_id)
+    if is_first and message.caption:
         context.user_data['caption_text'] = message.caption
         await maybe_create_telegraph_page(message, context, message.caption)
     await message.reply_text(
@@ -608,7 +520,11 @@ async def publish_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for ch in REQUIRED_CHANNELS:
         keyboard.append([InlineKeyboardButton(ch['name'], url=ch['invite'])])
 
-    await send_poster_with_caption(message, photos, caption, keyboard, context.bot)
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await send_photo_batches(message, photos)
+
+    await message.reply_text(text=caption, reply_markup=reply_markup)
+    await message.reply_text("✅ ပိုစတာ ဖန်တီးခြင်း အောင်မြင်ပါပြီ။")
     context.user_data.clear()
     return ConversationHandler.END
 
