@@ -308,20 +308,31 @@ async def post_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return POST_MOVIE
 
 
-async def send_photo_batches(message, photos):
-    """Telegram media_group limit က 10 ခု — ကျော်တာကို chunk ခွဲပါမယ်။ ပို့ပြီးသော message များကို ပြန်ပေးပါမယ်။"""
+async def send_photo_batches(message, photos, caption=None):
+    """Telegram media_group limit က 10 ခု — ကျော်တာကို chunk ခွဲပါမယ်။
+    caption က album ရဲ့ ပထမ ပုံပေါ်မှာပဲ ထည့်ပါမယ်။ ပို့ပြီးသော message များကို ပြန်ပေးပါမယ်။"""
     sent = []
+    caption_used = False
     for i in range(0, len(photos), 10):
         chunk = photos[i:i + 10]
+        media = []
+        for photo in chunk:
+            if caption and not caption_used:
+                media.append(InputMediaPhoto(media=photo, caption=caption))
+                caption_used = True
+            else:
+                media.append(InputMediaPhoto(media=photo))
         try:
-            sent.extend(await message.reply_media_group(
-                media=[InputMediaPhoto(media=p) for p in chunk]
-            ))
+            sent.extend(await message.reply_media_group(media=media))
         except Exception as e:
             logger.error(f"Media group chunk failed ({len(chunk)} photos): {e}")
             for photo in chunk:
                 try:
-                    sent.extend(await message.reply_photo(photo=photo))
+                    if caption and not caption_used:
+                        sent.extend(await message.reply_photo(photo=photo, caption=caption))
+                        caption_used = True
+                    else:
+                        sent.extend(await message.reply_photo(photo=photo))
                 except Exception as pe:
                     logger.error(f"reply_photo failed: {pe}")
     return sent
@@ -329,48 +340,35 @@ async def send_photo_batches(message, photos):
 
 async def publish_photos_as_one_post(message, photos, caption, reply_markup):
     """ပုံ + caption + buttons ကို Telegram မှာ တစ်ခါတည်း ပို့ပါမယ်။
-    media_group မှာ reply_markup မပါလောက်တဲ့အတွက် album ကို ယာယူပြီး copyMessages
-    နဲ့ buttons ပါတဲ့ copy တစ်ခု ပြန်လုပ်ပြီး မူလ album ကို ဖျက်ပါမယ်။"""
-    chat_id = message.chat_id
-
-    # ပုံတစ်ခုတည်းဆိုရင် တိုက်ရိုက် caption + buttons နဲ့ ပို့လို့ရပါတယ်
+    media_group မှာ reply_markup မပါလောက်တဲ့အတွက် album ရဲ့ ပထမ ပုံပေါ် caption ထည့်ပြီး
+    editMessageReplyMarkup နဲ့ button တွေ ပေါ်အောင် ထပ်ချက်ပါမယ်။"""
     if len(photos) == 1:
         await message.reply_photo(
             photo=photos[0], caption=caption, reply_markup=reply_markup
         )
         return
 
-    # caption က 1024 လုံးကျော်နေရင် album အတွင်း မထည့်နိုင်လောက်
+    # caption က 1024 လုံးကျော်နေရင် album ပထမ ပုံပေါ် မထည့်နိုင်လောက်
     if len(caption) > 1024:
         logger.warning("Caption over 1024 chars — album + separate text အသုံးပြုပါမယ်။")
         await send_photo_batches(message, photos)
         await message.reply_text(text=caption, reply_markup=reply_markup)
         return
 
-    sent = await send_photo_batches(message, photos)
-    source_ids = [m.message_id for m in sent if m]
-    if not source_ids:
+    sent = await send_photo_batches(message, photos, caption=caption)
+    if not sent:
         await message.reply_text(text=caption, reply_markup=reply_markup)
         return
 
-    bot = message.get_bot()
     try:
-        await bot.copy_messages(
-            chat_id=chat_id,
-            from_chat_id=chat_id,
-            message_ids=source_ids,
-            api_kwargs={"caption": caption, "reply_markup": reply_markup},
+        await message.get_bot().edit_message_reply_markup(
+            chat_id=message.chat_id,
+            message_id=sent[0].message_id,
+            reply_markup=reply_markup,
         )
     except Exception as e:
-        logger.error(f"copyMessages failed — album + separate text သို့ ပြန်ပါမယ်: {e}")
-        await message.reply_text(text=caption, reply_markup=reply_markup)
-        return
-
-    for message_id in source_ids:
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        except Exception as e:
-            logger.error(f"delete_message({message_id}) failed: {e}")
+        logger.error(f"edit_message_reply_markup failed — သီးခြား message ပို့ပါမယ်: {e}")
+        await message.reply_text(text="🎬 ရုပ်ရှင်ရယူရန်", reply_markup=reply_markup)
 
 
 async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
