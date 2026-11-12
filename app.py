@@ -47,7 +47,7 @@ def save_file(payload, file_id, file_name, caption=None):
     )
 
 
-async def backup_file_to_channel(bot, file_id, file_name, caption=None):
+async def backup_file_to_channel(bot, file_id, file_name, caption=None, payload=None):
     """नए फाइल को backup channel में copy करो (best-effort, never blocks main flow)."""
     if not BACKUP_CHANNEL_ID or not file_id:
         return
@@ -66,15 +66,27 @@ async def backup_file_to_channel(bot, file_id, file_name, caption=None):
         method = bot.send_video
         kwargs = {"video": file_id}
     cap = (text or "")[:1020]
+    sent = False
     try:
         await method(chat_id=BACKUP_CHANNEL_ID, **kwargs, caption=cap, disable_notification=True)
-        return
+        sent = True
     except Exception as e:
-        logger.warning(f"backup send failed ({e}); trying send_document")
-    try:
-        await bot.send_document(chat_id=BACKUP_CHANNEL_ID, document=file_id, caption=cap, disable_notification=True)
-    except Exception as e:
-        logger.warning(f"backup fallback failed: {e}")
+        logger.warning("backup send failed (%s); trying send_document" % e)
+        try:
+            await bot.send_document(chat_id=BACKUP_CHANNEL_ID, document=file_id, caption=cap, disable_notification=True)
+            sent = True
+        except Exception as e2:
+            logger.warning("backup fallback failed: %s" % e2)
+    if sent and payload:
+        try:
+            import time as _t
+            files_col.database["backed_up"].update_one(
+                {"_id": payload},
+                {"$set": {"method": "bot", "ts": _t.time()}},
+                upsert=True,
+            )
+        except Exception as e:
+            logger.warning("backed_up record failed: %s" % e)
 
 def get_file(payload):
     doc = files_col.find_one({"payload": payload})
@@ -423,7 +435,7 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = generate_payload()
     _cap = context.user_data.get('custom_caption') or ""
     save_file(payload, file_obj.file_id, file_name, _cap)
-    await backup_file_to_channel(context.bot, file_obj.file_id, file_name, _cap)
+    await backup_file_to_channel(context.bot, file_obj.file_id, file_name, _cap, payload=payload)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
     logger.info(f"✅ NEW POST DEEP LINK: {deep_link}")
@@ -596,7 +608,7 @@ async def publish_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payload = generate_payload()
     _cap = caption_text or ""
     save_file(payload, file_obj.file_id, file_name, _cap)
-    await backup_file_to_channel(context.bot, file_obj.file_id, file_name, _cap)
+    await backup_file_to_channel(context.bot, file_obj.file_id, file_name, _cap, payload=payload)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
     
     logger.info(f"✅ NEW POST_TEXT DEEP LINK: {deep_link}")
@@ -729,7 +741,7 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     payload = generate_payload()
     _cap = message.caption or ""
     save_file(payload, file_obj.file_id, file_name, _cap)
-    await backup_file_to_channel(context.bot, file_obj.file_id, file_name, _cap)
+    await backup_file_to_channel(context.bot, file_obj.file_id, file_name, _cap, payload=payload)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
     logger.info(f"✅ DEEP LINK: {file_name} -> {deep_link}")
 
