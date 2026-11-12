@@ -42,6 +42,33 @@ stats_col = db["stats"]
 def save_file(payload, file_id, file_name):
     files_col.update_one({"payload": payload}, {"$set": {"file_id": file_id, "file_name": file_name}}, upsert=True)
 
+
+async def backup_file_to_channel(bot, file_id, file_name):
+    """नए फाइल को backup channel में copy करो (best-effort, never blocks main flow)."""
+    if not BACKUP_CHANNEL_ID or not file_id:
+        return
+    name = file_name or ""
+    ext = name.rsplit(".", 1)[-1].lower().strip() if "." in name else ""
+    if ext in ("jpg", "jpeg", "png", "webp"):
+        method = bot.send_photo
+        kwargs = {"photo": file_id}
+    elif ext in ("mp3", "m4a", "flac", "ogg", "wav", "aac"):
+        method = bot.send_audio
+        kwargs = {"audio": file_id}
+    else:
+        method = bot.send_video
+        kwargs = {"video": file_id}
+    caption = name[:1020]
+    try:
+        await method(chat_id=BACKUP_CHANNEL_ID, **kwargs, caption=caption, disable_notification=True)
+        return
+    except Exception as e:
+        logger.warning(f"backup send failed ({e}); trying send_document")
+    try:
+        await bot.send_document(chat_id=BACKUP_CHANNEL_ID, document=file_id, caption=caption, disable_notification=True)
+    except Exception as e:
+        logger.warning(f"backup fallback failed: {e}")
+
 def get_file(payload):
     doc = files_col.find_one({"payload": payload})
     if doc:
@@ -102,6 +129,15 @@ logger.info(f"🔧 Using Bot Username: @{BOT_USERNAME}")
 
 ADMIN_IDS = [int(x.strip()) for x in os.environ.get("ADMIN_ID", "").split(",") if x.strip()]
 logger.info(f"👑 Admin IDs: {ADMIN_IDS}")
+
+# ---------- Backup Channel (optional) ----------
+_raw_bc = os.environ.get("BACKUP_CHANNEL", "").strip()
+try:
+    BACKUP_CHANNEL_ID = int(_raw_bc) if _raw_bc else None
+except ValueError:
+    BACKUP_CHANNEL_ID = None
+if BACKUP_CHANNEL_ID:
+    logger.info(f"💾 Backup channel enabled: {BACKUP_CHANNEL_ID}")
 
 # ============================================================
 # 🔥 Environment Variable ကနေ Channel IDs ကိုဖတ်မယ်
@@ -379,6 +415,7 @@ async def publish_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
+    await backup_file_to_channel(context.bot, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
 
     logger.info(f"✅ NEW POST DEEP LINK: {deep_link}")
@@ -550,6 +587,7 @@ async def publish_post_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
+    await backup_file_to_channel(context.bot, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
     
     logger.info(f"✅ NEW POST_TEXT DEEP LINK: {deep_link}")
@@ -679,6 +717,7 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     payload = generate_payload()
     save_file(payload, file_obj.file_id, file_name)
+    await backup_file_to_channel(context.bot, file_obj.file_id, file_name)
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
     logger.info(f"✅ DEEP LINK: {file_name} -> {deep_link}")
 
