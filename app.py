@@ -698,6 +698,8 @@ async def _send_album_links(context: ContextTypes.DEFAULT_TYPE, media_group_id: 
 
 
 async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user is None:
+        return
     user_id = update.effective_user.id
     if not is_admin(user_id):
         return
@@ -1078,7 +1080,7 @@ telegram_app.add_handler(CommandHandler("done", done_command))
 telegram_app.add_handler(CommandHandler("menu", admin_menu))
 telegram_app.add_handler(CallbackQueryHandler(menu_callback, pattern="cmd_"))
 telegram_app.add_handler(CallbackQueryHandler(check_callback, pattern="check_again"))
-telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_file_upload))
+telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND & ~filters.UpdateType.CHANNEL_POST, handle_file_upload))
 
 # ============================================================
 # 🌐 Flask webhook — run_coroutine_threadsafe လုပ်ရန် loop ကို
