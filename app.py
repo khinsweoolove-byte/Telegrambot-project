@@ -741,7 +741,13 @@ async def handle_file_upload(update: Update, context: ContextTypes.DEFAULT_TYPE)
     payload = generate_payload()
     _cap = message.caption or ""
     save_file(payload, file_obj.file_id, file_name, _cap)
-    await backup_file_to_channel(context.bot, file_obj.file_id, file_name, _cap, payload=payload)
+    # Backup channel caption must be the movie name shown together with the deep
+    # link (the file name), NOT the caption the sender attached to the file
+    # (which is often just a number like "1798").
+    backup_caption = (file_name or "movie").strip()
+    await backup_file_to_channel(
+        context.bot, file_obj.file_id, file_name, backup_caption, payload=payload
+    )
     deep_link = create_deep_linked_url(BOT_USERNAME, payload)
     logger.info(f"✅ DEEP LINK: {file_name} -> {deep_link}")
 
