@@ -34,8 +34,10 @@ _tlobjects.setdefault(_LegacyChannel.CONSTRUCTOR_ID, _LegacyChannel)
 API_ID = int(os.getenv("TG_API_ID") or "31778137")
 API_HASH = os.getenv("TG_API_HASH") or "357247ed45b28459c6600e31cce5b773"
 SESSION = (os.getenv("TG_SESSION") or "").strip()
-# Destination is the same bot's DM.  Override with FORWARD_BOT env if needed.
-BOT_USERNAME = os.getenv("FORWARD_BOT", "@WZNmoviefilsend_bot").strip()
+# Destinations are bot DMs.  Comma-separated list supported (both bots).
+BOT_USERNAMES = [b.strip() for b in os.getenv(
+    "FORWARD_BOT", "@WZNmoviefilsend_bot,@GussesFootballprowzn_bot"
+).split(",") if b.strip()]
 DELAY = float(os.getenv("FORWARD_DELAY", "1.5") or "1.5")
 
 _PRIVATE = re.compile(r"t\.me/c/(\d+)/(\d+)")
@@ -71,9 +73,9 @@ async def _ensure_connected(client):
 
 
 class _Forwarder:
-    def __init__(self, client, bot):
+    def __init__(self, client, bots):
         self.client = client
-        self.bot = bot
+        self.bots = bots  # list of (entity, display_name)
         self.queue = asyncio.Queue()
         self.active = set()
         self.busy = False
@@ -133,23 +135,24 @@ class _Forwarder:
             if not pending:
                 return
             ids = [m.id for m in pending]
-            while True:
-                try:
-                    await client.forward_messages(self.bot, ids, from_peer=source)
-                    sent += len(ids)
-                    print(f"[link-forwarder] forwarded {ids[0]}..{ids[-1]} (total {sent})", flush=True)
-                    break
-                except FloodWaitError as exc:
-                    print(f"[link-forwarder] FloodWait {exc.seconds}s", flush=True)
-                    await asyncio.sleep(exc.seconds + 3)
-                except ConnectionError:
-                    print("[link-forwarder] connection dropped while forwarding, reconnecting ...", flush=True)
-                    await asyncio.sleep(2)
-                    if not await _ensure_connected(client):
+            for bot, bot_name in self.bots:
+                while True:
+                    try:
+                        await client.forward_messages(bot, ids, from_peer=source)
+                        sent += len(ids)
+                        print(f"[link-forwarder] forwarded {ids[0]}..{ids[-1]} -> {bot_name} (total {sent})", flush=True)
                         break
-                except RPCError as exc:
-                    print(f"[link-forwarder] FAILED {ids}: {exc}", flush=True)
-                    break
+                    except FloodWaitError as exc:
+                        print(f"[link-forwarder] FloodWait {exc.seconds}s", flush=True)
+                        await asyncio.sleep(exc.seconds + 3)
+                    except ConnectionError:
+                        print("[link-forwarder] connection dropped while forwarding, reconnecting ...", flush=True)
+                        await asyncio.sleep(2)
+                        if not await _ensure_connected(client):
+                            break
+                    except RPCError as exc:
+                        print(f"[link-forwarder] FAILED {ids} -> {bot_name}: {exc}", flush=True)
+                        break
             pending = []
             await asyncio.sleep(DELAY)
 
@@ -204,9 +207,20 @@ async def _listen():
         await client.disconnect()
         return
     me = await client.get_me()
-    bot = await client.get_entity(BOT_USERNAME)
-    _forwarder = _Forwarder(client, bot)
-    print(f"[link-forwarder] user {me.id} -> bot {bot.id} ({BOT_USERNAME})", flush=True)
+    bots = []
+    for name in BOT_USERNAMES:
+        try:
+            entity = await client.get_entity(name)
+            bots.append((entity, name))
+            print(f"[link-forwarder] destination {name} -> {entity.id}", flush=True)
+        except Exception as exc:
+            print(f"[link-forwarder] cannot resolve {name}: {exc}", flush=True)
+    if not bots:
+        print("[link-forwarder] no destination bots - disabled", flush=True)
+        await client.disconnect()
+        return
+    _forwarder = _Forwarder(client, bots)
+    print(f"[link-forwarder] user {me.id} -> {len(bots)} bot(s)", flush=True)
     print("[link-forwarder] ready for links from bot ...", flush=True)
 
     while True:
