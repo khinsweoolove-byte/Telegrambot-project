@@ -5,12 +5,13 @@ import logging
 import secrets
 import sys
 import time
+import urllib.request
 from datetime import datetime
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, LinkPreviewOptions
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters, ContextTypes,
-    ConversationHandler, CallbackQueryHandler
+    ConversationHandler, CallbackQueryHandler, TypeHandler
 )
 from telegram.helpers import create_deep_linked_url
 from pymongo import MongoClient
@@ -1091,6 +1092,17 @@ telegram_app = (
     .build()
 )
 
+# Polling heartbeat. Registered in a negative group so it runs before every
+# other handler without blocking/swallowing any update.
+_wzn_last_update_at = [0.0]
+
+
+async def _track_wzn_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _wzn_last_update_at[0] = time.time()
+
+
+telegram_app.add_handler(TypeHandler(Update, _track_wzn_update), group=-10)
+
 telegram_app.add_handler(ConversationHandler(
     entry_points=[CommandHandler('post', post_start)],
     states={
@@ -1134,11 +1146,34 @@ telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND & ~filter
 #    `/webhook` handler က NameError ဖြစ်ပြီး bot အလုပ်မလုပ်ပါ။
 # ============================================================
 loop = None
+_wzn_polling_ok = False
+_watchdog_started_at = time.time()
 
 
 @app.route('/', methods=['GET'])
 def home():
     return "Bot is running!", 200
+
+
+@app.route('/status', methods=['GET'])
+def status():
+    """Health endpoint for UptimeRobot and the in-process self-watchdog."""
+    if USE_POLLING:
+        updater = getattr(telegram_app, "updater", None)
+        wzn_ok = bool(_wzn_polling_ok and updater and updater.running)
+    else:
+        wzn_ok = bool(loop and loop.is_running() and telegram_app.running)
+    football_ok = False
+    try:
+        import football_bot
+        football_ok = bool(football_bot.is_healthy())
+    except Exception as exc:
+        logger.warning(f"football bot health check failed: {exc}")
+    healthy = wzn_ok and football_ok
+    body = ("OK" if healthy else
+            f"DEGRADED wzn={int(wzn_ok)} football={int(football_ok)}")
+    return body, (200 if healthy else 503)
+
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -1166,19 +1201,96 @@ def start_flask():
     except ImportError:
         app.run(host="0.0.0.0", port=port, use_reloader=False)
 
+def _polling_task_alive(app_ref):
+    """False when PTB's background getUpdates task has died."""
+    updater = getattr(app_ref, "updater", None)
+    task = getattr(updater, "_Updater__polling_task", None)
+    return task is None or not task.done()
+
+
+def _self_watchdog():
+    """Force a container restart if Flask or either polling loop stays unhealthy."""
+    port = int(os.environ.get("PORT", 5000))
+    status_url = f"http://127.0.0.1:{port}/status"
+    home_url = f"http://127.0.0.1:{port}/"
+    failures = 0
+    last_keepalive = 0.0
+    while True:
+        time.sleep(60)
+        now = time.time()
+        if now - _watchdog_started_at < 180:
+            continue
+        if now - last_keepalive >= 240:
+            try:
+                urllib.request.urlopen(home_url, timeout=10).read()
+            except Exception as exc:
+                logger.warning(f"Self watchdog keepalive failed: {exc}")
+            last_keepalive = now
+        try:
+            with urllib.request.urlopen(status_url, timeout=10) as resp:
+                code = resp.getcode()
+            if code == 200:
+                failures = 0
+                continue
+            logger.warning(f"Self watchdog: /status returned {code}")
+        except Exception as exc:
+            logger.warning(f"Self watchdog: /status unreachable: {exc}")
+        failures += 1
+        if failures >= 3:
+            logger.error("Self watchdog: unhealthy for 3 minutes - exiting for restart")
+            os._exit(1)
+
+
+async def _run_wzn_polling():
+    """WZN polling with automatic restart on failure."""
+    global _wzn_polling_ok
+    backoff = 5
+    while True:
+        app_ref = telegram_app
+        try:
+            if not app_ref.updater or not app_ref.updater.running:
+                await app_ref.initialize()
+                await app_ref.start()
+                await app_ref.updater.start_polling(
+                    allowed_updates=["message", "callback_query"],
+                    drop_pending_updates=True,
+                )
+                logger.info("✅ WZN polling (re)started")
+            _wzn_polling_ok = True
+            while True:
+                await asyncio.sleep(15)
+                if not app_ref.updater.running or not _polling_task_alive(app_ref):
+                    raise RuntimeError("WZN polling task stopped")
+                await app_ref.bot.get_me()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _wzn_polling_ok = False
+            logger.exception(f"❌ WZN polling failed: {exc}")
+            try:
+                if app_ref.updater and app_ref.updater.running:
+                    await app_ref.updater.stop()
+                if app_ref.running:
+                    await app_ref.stop()
+                await app_ref.shutdown()
+            except Exception as cleanup_exc:
+                logger.warning(f"WZN cleanup error: {cleanup_exc}")
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 120)
+
+
 if __name__ == "__main__":
     if link_forwarder:
         link_forwarder.start_link_forwarder()
     if USE_POLLING:
         # ---------- Polling mode (Render free tier / local) ----------
-        # Flask ကို thread ထဲမှာ run ပြီး run_polling က event loop ကို ကိုင်မယ်။
         threading.Thread(target=start_flask, daemon=True).start()
-        logger.info("🚀 Bot started (polling mode)")
-        telegram_app.run_polling(
-            allowed_updates=["message", "callback_query"],
-            drop_pending_updates=True,
-            close_loop=False,
-        )
+        threading.Thread(target=_self_watchdog, daemon=True).start()
+        logger.info("🚀 Bot started (polling mode, watchdog enabled)")
+        try:
+            asyncio.run(_run_wzn_polling())
+        except KeyboardInterrupt:
+            logger.info("Shutting down...")
     else:
         # ---------- Webhook mode (production / always-on) ----------
         loop = asyncio.new_event_loop()

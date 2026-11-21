@@ -65,6 +65,12 @@ MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "telegram_bot")
 
 _submit_link = None
 _loop = None
+_POLLING_OK = False
+
+
+def is_healthy():
+    """True when the football bot is running, or intentionally disabled."""
+    return bool(_POLLING_DISABLED or _POLLING_OK)
 
 
 def is_admin(user_id):
@@ -78,6 +84,8 @@ if MONGODB_URI:
 else:
     _client = None
     files_col = None
+
+_POLLING_DISABLED = not BOT_TOKEN_2 or not POST_CHANNEL_IDS or files_col is None
 
 
 def generate_id(length=6):
@@ -605,34 +613,58 @@ def _build_app():
     return app
 
 
+def _polling_task_alive(app):
+    """False when PTB's background getUpdates task has died."""
+    updater = getattr(app, "updater", None)
+    task = getattr(updater, "_Updater__polling_task", None)
+    return task is None or not task.done()
+
+
 async def _run():
+    """Football bot polling with automatic restart on failure."""
+    global _POLLING_OK
     print(f"[football-bot] starting; channels={POST_CHANNEL_IDS} backup={BACKUP_CHANNEL_ID}", flush=True)
-    if not BOT_TOKEN_2:
-        print("[football-bot] BOT_TOKEN_2 not set - disabled", flush=True)
+    if _POLLING_DISABLED:
+        print("[football-bot] missing BOT_TOKEN_2/CHANNEL_IDS/MONGODB_URI - disabled", flush=True)
         return
-    if not POST_CHANNEL_IDS:
-        print("[football-bot] CHANNEL_IDS not set - disabled", flush=True)
-        return
-    if files_col is None:
-        print("[football-bot] MONGO_URI/MONGODB_URI not set - disabled", flush=True)
-        return
-    app = _build_app()
-    me = await app.bot.get_me()
-    print(f"[football-bot] {me.username} ({me.id}) ready for post links", flush=True)
-    # run_polling() installs signal handlers, which is only allowed in the main
-    # thread.  Start the pieces manually so this second bot can live in a thread.
-    await app.initialize()
-    await app.start()
-    if app.updater:
-        await app.updater.start_polling(drop_pending_updates=True)
-    print("[football-bot] polling started", flush=True)
-    try:
-        await asyncio.Event().wait()
-    finally:
-        if app.updater and app.updater.running:
-            await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
+    backoff = 5
+    while True:
+        app = None
+        try:
+            # Rebuild per attempt so a failed session never reuses closed HTTP clients.
+            app = _build_app()
+            me = await app.bot.get_me()
+            print(f"[football-bot] {me.username} ({me.id}) ready for post links", flush=True)
+            # run_polling() installs signal handlers, which is only allowed in the
+            # main thread. Start manually in this thread's own event loop.
+            await app.initialize()
+            await app.start()
+            if app.updater:
+                await app.updater.start_polling(drop_pending_updates=True)
+            _POLLING_OK = True
+            print("[football-bot] polling started", flush=True)
+            while True:
+                await asyncio.sleep(15)
+                if not app.updater.running or not _polling_task_alive(app):
+                    raise RuntimeError("football polling task stopped")
+                await app.bot.get_me()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _POLLING_OK = False
+            print(f"[football-bot] polling failed: {type(exc).__name__}: {exc}", flush=True)
+            traceback.print_exc()
+            if app is not None:
+                try:
+                    if app.updater and app.updater.running:
+                        await app.updater.stop()
+                    if app.running:
+                        await app.stop()
+                    await app.shutdown()
+                except Exception as cleanup_exc:
+                    print(f"[football-bot] cleanup error: {cleanup_exc}", flush=True)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, 120)
 
 
 def start_football_bot(link_submitter):
