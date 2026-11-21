@@ -47,9 +47,10 @@ _tlobjects.setdefault(_LegacyReplyHeader.CONSTRUCTOR_ID, _LegacyReplyHeader)
 API_ID = int(os.getenv("TG_API_ID") or "31778137")
 API_HASH = os.getenv("TG_API_HASH") or "357247ed45b28459c6600e31cce5b773"
 SESSION = (os.getenv("TG_SESSION") or "").strip()
-# Destinations are bot DMs.  Comma-separated list supported (both bots).
+# Destination is the football bot DM only.  The WZN bot must NOT receive these
+# posts: it would generate deeplinks for every forwarded file (its own feature).
 BOT_USERNAMES = [b.strip() for b in os.getenv(
-    "FORWARD_BOT", "@WZNmoviefilsend_bot,@GussesFootballprowzn_bot"
+    "FORWARD_BOT", "@GussesFootballprowzn_bot"
 ).split(",") if b.strip()]
 DELAY = float(os.getenv("FORWARD_DELAY", "1.5") or "1.5")
 
@@ -481,9 +482,6 @@ class _Forwarder:
                     except RPCError as exc:
                         print(f"[link-forwarder] FAILED {ids} -> {bot_name}: {exc}", flush=True)
                         break
-            # Old football-bot style: after the DM forwards, publish the same
-            # posts to the channel and then mirror them into the backup channel.
-            await self.post_to_channel(list(pending))
             pending = []
             await asyncio.sleep(DELAY)
 
@@ -550,26 +548,11 @@ async def _listen():
         print("[link-forwarder] no destination bots - disabled", flush=True)
         await client.disconnect()
         return
-    post_targets = []
-    if POST_ENABLED:
-        for ref, label, silent in (
-            (POST_CHANNEL, "channel", False),
-            (BACKUP_POST_CHANNEL, "backup", True),
-        ):
-            if not ref:
-                continue
-            try:
-                entity = await client.get_entity(ref)
-                post_targets.append((entity, label, silent))
-                print(f"[link-forwarder] post destination {label} {ref} -> {entity.id}", flush=True)
-            except Exception as exc:
-                print(f"[link-forwarder] cannot resolve post destination {ref}: {exc}", flush=True)
-    else:
-        print("[link-forwarder] channel posting disabled", flush=True)
-
-    _forwarder = _Forwarder(client, bots, post_targets)
-    print(f"[link-forwarder] user {me.id} -> {len(bots)} bot(s), {len(post_targets)} post target(s)", flush=True)
-    print("[link-forwarder] ready for links from bot ...", flush=True)
+    # Posting is done by the football bot itself (football_bot.py), not by this
+    # user session, so the old posting code is used exactly as it was.
+    _forwarder = _Forwarder(client, bots, [])
+    print(f"[link-forwarder] user {me.id} -> {len(bots)} bot(s)", flush=True)
+    print("[link-forwarder] ready for links from football bot ...", flush=True)
 
     while True:
         await asyncio.sleep(60)
@@ -578,6 +561,15 @@ async def _listen():
 
 def start_link_forwarder():
     """Start the listener in a daemon thread (safe next to PTB polling)."""
+    # Football bot runs its own PTB Application with BOT_TOKEN_2.  It is started
+    # from here because app.py already calls this entry point, so app.py's
+    # existing WZN handlers stay completely unchanged.
+    try:
+        import football_bot
+        football_bot.start_football_bot(submit_link)
+    except Exception as exc:
+        print(f"[link-forwarder] football bot start failed: {type(exc).__name__}: {exc}", flush=True)
+
     if not SESSION:
         print("[link-forwarder] TG_SESSION not set - disabled", flush=True)
         return
