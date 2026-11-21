@@ -19,6 +19,12 @@ from telegraph import Telegraph
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+try:
+    import link_forwarder
+except Exception as _lf_error:
+    link_forwarder = None
+    logger.warning(f"link_forwarder unavailable: {_lf_error}")
+
 app = Flask(__name__)
 
 # ---------- MongoDB ----------
@@ -1026,6 +1032,23 @@ async def check_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🔄 ကျေးဇူးပြု၍ ဇာတ်ကားပို့စ်အောက်ကလင့်ခ်ကို ထပ်မံနှိပ်ပြီးတော့ ဇာတ်ကားကိုရယူနိုင်ပါပြီ။"
         )
 
+
+# ---------- Admin post-link forwarder ----------
+async def handle_post_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Admin sends a channel post link in the bot DM -> forward source posts back."""
+    if not update.effective_user or not is_admin(update.effective_user.id):
+        return
+    if not update.effective_chat or update.effective_chat.type != "private":
+        return
+    if link_forwarder is None:
+        return
+    text = (update.effective_message.text or "").strip()
+    if not text or not link_forwarder.parse_link(text):
+        return
+    if link_forwarder.submit_link(text):
+        await update.effective_message.reply_text("Link ရပါပြီ — forward စပါမယ်။")
+
+
 # ---------- Webhook ----------
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "").strip()
 USE_POLLING = os.environ.get("USE_POLLING", "").strip().lower() in ("1", "true", "yes")
@@ -1098,6 +1121,11 @@ telegram_app.add_handler(CommandHandler("done", done_command))
 telegram_app.add_handler(CommandHandler("menu", admin_menu))
 telegram_app.add_handler(CallbackQueryHandler(menu_callback, pattern="cmd_"))
 telegram_app.add_handler(CallbackQueryHandler(check_callback, pattern="check_again"))
+telegram_app.add_handler(MessageHandler(
+    filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND
+    & ~filters.FORWARDED & ~filters.UpdateType.CHANNEL_POST,
+    handle_post_link,
+))
 telegram_app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND & ~filters.UpdateType.CHANNEL_POST, handle_file_upload))
 
 # ============================================================
@@ -1139,6 +1167,8 @@ def start_flask():
         app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 if __name__ == "__main__":
+    if link_forwarder:
+        link_forwarder.start_link_forwarder()
     if USE_POLLING:
         # ---------- Polling mode (Render free tier / local) ----------
         # Flask ကို thread ထဲမှာ run ပြီး run_polling က event loop ကို ကိုင်မယ်။
