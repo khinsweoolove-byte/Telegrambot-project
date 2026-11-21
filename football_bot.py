@@ -619,7 +619,20 @@ async def _run():
     app = _build_app()
     me = await app.bot.get_me()
     print(f"[football-bot] {me.username} ({me.id}) ready for post links", flush=True)
-    await app.run_polling(drop_pending_updates=True)
+    # run_polling() installs signal handlers, which is only allowed in the main
+    # thread.  Start the pieces manually so this second bot can live in a thread.
+    await app.initialize()
+    await app.start()
+    if app.updater:
+        await app.updater.start_polling(drop_pending_updates=True)
+    print("[football-bot] polling started", flush=True)
+    try:
+        await asyncio.Event().wait()
+    finally:
+        if app.updater and app.updater.running:
+            await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
 
 
 def start_football_bot(link_submitter):
