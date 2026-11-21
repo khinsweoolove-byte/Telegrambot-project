@@ -18,7 +18,7 @@ from telethon.errors import FloodWaitError, RPCError
 from telethon.extensions.binaryreader import tlobjects as _tlobjects
 from telethon.sessions import StringSession
 from telethon.tl import types as _tl_types
-from telethon.tl.types import MessageMediaPhoto, MessageService
+from telethon.tl.types import MessageMediaPhoto, MessageReplyHeader, MessageService
 
 
 # Telegram still sometimes sends the layer 228-231 `channel` constructor
@@ -30,6 +30,16 @@ class _LegacyChannel(_tl_types.Channel):
 
 
 _tlobjects.setdefault(_LegacyChannel.CONSTRUCTOR_ID, _LegacyChannel)
+
+
+# Telegram still sends the older MessageReplyHeader constructor (0x1b97dd66)
+# alongside the new one.  Telethon 1.46 dropped the old ID, which makes any
+# messages response containing a reply unreadable.  Re-register that ID.
+class _LegacyReplyHeader(MessageReplyHeader):
+    CONSTRUCTOR_ID = 0x1B97DD66
+
+
+_tlobjects.setdefault(_LegacyReplyHeader.CONSTRUCTOR_ID, _LegacyReplyHeader)
 
 API_ID = int(os.getenv("TG_API_ID") or "31778137")
 API_HASH = os.getenv("TG_API_HASH") or "357247ed45b28459c6600e31cce5b773"
