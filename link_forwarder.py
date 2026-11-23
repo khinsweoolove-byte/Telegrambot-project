@@ -524,7 +524,13 @@ class _Forwarder:
             return True
 
         ok = True
-        async for m in client.iter_messages(source, min_id=start - 1, reverse=True):
+        # Snapshot the range when the link was submitted.  Without max_id the
+        # iterator keeps picking up posts the football bot itself creates while
+        # forwarding (the source can be a target channel), causing a runaway.
+        async for m in client.iter_messages(source, min_id=start - 1,
+                                            max_id=end, reverse=True):
+            if m.id > end:
+                break
             if isinstance(m, MessageService):
                 continue
             if not (m.media or (m.message and m.message.strip())):
