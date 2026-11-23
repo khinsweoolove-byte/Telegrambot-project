@@ -72,6 +72,7 @@ def _begin_post_ack():
 
 def notify_post_done(ok=True, detail=""):
     """Called by football_bot (its own thread) when a forwarded post is done."""
+    global _post_ack
     with _ack_lock:
         fut = _post_ack
         _post_ack = None
