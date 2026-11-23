@@ -528,7 +528,7 @@ class _Forwarder:
         # iterator keeps picking up posts the football bot itself creates while
         # forwarding (the source can be a target channel), causing a runaway.
         async for m in client.iter_messages(source, min_id=start - 1,
-                                            max_id=end, reverse=True):
+                                            max_id=end + 1, reverse=True):
             if m.id > end:
                 break
             if isinstance(m, MessageService):
