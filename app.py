@@ -5,6 +5,7 @@ import logging
 import secrets
 import sys
 import time
+import traceback
 import urllib.request
 from datetime import datetime
 from flask import Flask, request, jsonify
@@ -1222,7 +1223,10 @@ def admin_qr_start():
             loop.run_until_complete(go())
         except Exception as exc:
             _qr_login["state"] = "error"
-            _qr_login["error"] = str(exc)[:300]
+            _qr_login["error"] = (type(exc).__name__ + ":" +
+                                  repr(exc) + ":" +
+                                  traceback.format_exc()[-500:])[:900]
+            logger.exception("QR login failed")
 
     threading.Thread(target=worker, daemon=True).start()
     return "started", 200
