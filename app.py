@@ -7,7 +7,7 @@ import sys
 import time
 import urllib.request
 from datetime import datetime
-from flask import Flask, request
+from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, LinkPreviewOptions
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, filters, ContextTypes,
@@ -1173,6 +1173,75 @@ def status():
     body = ("OK" if healthy else
             f"DEGRADED wzn={int(wzn_ok)} football={int(football_ok)}")
     return body, (200 if healthy else 503)
+
+
+# ---- Render-side QR login (creates the userbot session on Render's own IP) ----
+_qr_login = {"state": "idle", "url": "", "session": "", "error": ""}
+
+
+def _qr_admin_ok():
+    key = os.getenv("ADMIN_KEY") or ""
+    return bool(key) and request.headers.get("X-Admin-Key") == key
+
+
+@app.route('/admin/qr/start', methods=['POST'])
+def admin_qr_start():
+    """Start a Telethon QR login inside the Render process."""
+    if not _qr_admin_ok():
+        return "unauthorized", 401
+    if _qr_login["state"] in ("starting", "waiting"):
+        return "already running", 409
+    from telethon import TelegramClient
+    from telethon.errors import SessionPasswordNeededError
+    from telethon.sessions import StringSession
+    import link_forwarder
+
+    _qr_login.update(state="starting", url="", session="", error="")
+
+    def worker():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        async def go():
+            client = TelegramClient(StringSession(), link_forwarder.API_ID,
+                                    link_forwarder.API_HASH)
+            await client.connect()
+            qr = await client.qr_login()
+            _qr_login["url"] = qr.url
+            _qr_login["state"] = "waiting"
+            try:
+                await qr.wait(300)
+            except SessionPasswordNeededError:
+                _qr_login["state"] = "2fa"
+                return
+            _qr_login["session"] = StringSession.save(client.session)
+            _qr_login["state"] = "done"
+            await client.disconnect()
+
+        try:
+            loop.run_until_complete(go())
+        except Exception as exc:
+            _qr_login["state"] = "error"
+            _qr_login["error"] = str(exc)[:300]
+
+    threading.Thread(target=worker, daemon=True).start()
+    return "started", 200
+
+
+@app.route('/admin/qr/status', methods=['GET'])
+def admin_qr_status():
+    if not _qr_admin_ok():
+        return "unauthorized", 401
+    return jsonify({k: _qr_login[k] for k in ("state", "url", "error")})
+
+
+@app.route('/admin/qr/session', methods=['GET'])
+def admin_qr_session():
+    if not _qr_admin_ok():
+        return "unauthorized", 401
+    if _qr_login["state"] != "done" or not _qr_login["session"]:
+        return "not ready", 409
+    return jsonify({"session": _qr_login["session"]})
 
 
 @app.route('/webhook', methods=['POST'])
