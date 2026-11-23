@@ -1210,11 +1210,17 @@ def admin_qr_start():
             qr = await client.qr_login()
             _qr_login["url"] = qr.url
             _qr_login["state"] = "waiting"
-            try:
-                await qr.wait(300)
-            except SessionPasswordNeededError:
-                _qr_login["state"] = "2fa"
-                return
+            while True:
+                try:
+                    await qr.wait(25)
+                    break
+                except asyncio.TimeoutError:
+                    await qr.recreate()
+                    _qr_login["url"] = qr.url
+                    _qr_login["state"] = "waiting"
+                except SessionPasswordNeededError:
+                    _qr_login["state"] = "2fa"
+                    return
             _qr_login["session"] = StringSession.save(client.session)
             _qr_login["state"] = "done"
             await client.disconnect()
