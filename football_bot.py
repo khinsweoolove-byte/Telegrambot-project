@@ -43,6 +43,7 @@ from link_forwarder import (
     _localize_text,
     _make_movie_title,
     add_channel_footer,
+    notify_post_done,
     parse_link,
     remove_links_from_text,
 )
@@ -501,7 +502,12 @@ async def _publish_forward_single(context, msg, media_type, media):
     name = getattr(media, "file_name", None) or ""
     title = await _make_movie_title(name, (msg.caption or "").strip())
     post_name = _english_file_name(title, name)
-    new_id = await post_to_all_channels(context.bot, media, media_type, title, post_name)
+    try:
+        new_id = await post_to_all_channels(context.bot, media, media_type, title, post_name)
+    except Exception as exc:
+        notify_post_done(False, f"{type(exc).__name__}: {exc}")
+        raise
+    notify_post_done(True, post_name)
     sid = store_file(new_id, media_type, caption=title, filename=post_name,
                      file_size=getattr(media, "file_size", None))
     link = build_deeplink(context.bot.username, sid)
@@ -530,7 +536,12 @@ async def _direct_upload(context, message, media_type, media):
 async def _publish_album(context, buf):
     items = await _album_items_from(buf)
     caption = next((i["title"] for i in items if i["title"]), "")
-    await _post_album_to_channels(context.bot, items, caption)
+    try:
+        await _post_album_to_channels(context.bot, items, caption)
+    except Exception as exc:
+        notify_post_done(False, f"{type(exc).__name__}: {exc}")
+        raise
+    notify_post_done(True, caption[:60])
     sid = store_album([{k: v for k, v in i.items() if k != "media"} for i in items], caption=caption)
     link = build_deeplink(context.bot.username, sid)
     await buf["message"].reply_text(f"✅ Post {len(items)} ခု အုပ်စုလိုက် တင်ပြီးပါပြီ!\n🔗 Deeplink: {link}")
@@ -571,12 +582,18 @@ async def handle_forwarded(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if media is None:
         caption = await _localize_text(raw)
         if not caption:
+            notify_post_done(True, "skipped empty text")
             return
         sid = store_file("", "text", caption=caption)
         link = build_deeplink(context.bot.username, sid)
         post_text = add_channel_footer(caption)
-        for chat_id in POST_CHANNEL_IDS:
-            await run_with_retry(lambda c=chat_id: context.bot.send_message(chat_id=c, text=post_text))
+        try:
+            for chat_id in POST_CHANNEL_IDS:
+                await run_with_retry(lambda c=chat_id: context.bot.send_message(chat_id=c, text=post_text))
+        except Exception as exc:
+            notify_post_done(False, f"{type(exc).__name__}: {exc}")
+            raise
+        notify_post_done(True, caption[:60])
         print(f"[football-bot] posted text to {len(POST_CHANNEL_IDS)} channel(s)", flush=True)
         await msg.reply_text("✅ Post တင်ပြီးပါပြီ!")
         await msg.reply_text(f"🔗 Deeplink: {link}")

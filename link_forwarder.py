@@ -9,6 +9,7 @@ Runs in its own daemon thread with its own asyncio loop so it never interferes
 with python-telegram-bot's polling/webhook loop or the existing bot features.
 """
 import asyncio
+import concurrent.futures
 import os
 import re
 import tempfile
@@ -53,6 +54,33 @@ BOT_USERNAMES = [b.strip() for b in os.getenv(
     "FORWARD_BOT", "@GussesFootballprowzn_bot"
 ).split(",") if b.strip()]
 DELAY = float(os.getenv("FORWARD_DELAY", "1.5") or "1.5")
+# Strict flow: forward ONE post -> wait for the football bot to confirm it
+# reached both channels -> only then forward the next one.
+POST_ACK_TIMEOUT = float(os.getenv("POST_ACK_TIMEOUT", "180") or "180")
+_post_ack = None
+_ack_lock = threading.Lock()
+
+
+def _begin_post_ack():
+    """Register a fresh confirmation slot for the post about to be forwarded."""
+    global _post_ack
+    fut = concurrent.futures.Future()
+    with _ack_lock:
+        _post_ack = fut
+    return fut
+
+
+def notify_post_done(ok=True, detail=""):
+    """Called by football_bot (its own thread) when a forwarded post is done."""
+    with _ack_lock:
+        fut = _post_ack
+        _post_ack = None
+    if fut is None or fut.done():
+        return
+    if ok:
+        fut.set_result(True)
+    else:
+        fut.set_exception(RuntimeError(detail or "post failed"))
 
 # ---------- Original @GussesFootballprowzn_bot channel posting behaviour ----------
 # Ported from kokyi152-wzn/telegram-file-bot (main.py) so posts keep the same
@@ -459,11 +487,11 @@ class _Forwarder:
         pending = []
         sent = 0
 
-        async def flush():
-            nonlocal pending, sent
-            if not pending:
-                return
-            ids = [m.id for m in pending]
+        async def forward_one(group):
+            """Forward one post (or one album) and wait for its channel ack."""
+            nonlocal sent
+            ids = [m.id for m in group]
+            ack = _begin_post_ack()
             for bot, bot_name in self.bots:
                 while True:
                     try:
@@ -478,13 +506,23 @@ class _Forwarder:
                         print("[link-forwarder] connection dropped while forwarding, reconnecting ...", flush=True)
                         await asyncio.sleep(2)
                         if not await _ensure_connected(client):
-                            break
+                            notify_post_done(False, "forward connection lost")
+                            return False
                     except RPCError as exc:
                         print(f"[link-forwarder] FAILED {ids} -> {bot_name}: {exc}", flush=True)
-                        break
-            pending = []
+                        notify_post_done(False, f"forward failed: {exc}")
+                        return False
+            try:
+                await asyncio.wait_for(asyncio.wrap_future(ack), timeout=POST_ACK_TIMEOUT)
+            except Exception as exc:
+                print(f"[link-forwarder] no confirmation for {ids[0]}..{ids[-1]}: "
+                      f"{type(exc).__name__}: {exc}", flush=True)
+                return False
+            print(f"[link-forwarder] confirmed {ids[0]}..{ids[-1]}", flush=True)
             await asyncio.sleep(DELAY)
+            return True
 
+        ok = True
         async for m in client.iter_messages(source, min_id=start - 1, reverse=True):
             if isinstance(m, MessageService):
                 continue
@@ -497,16 +535,28 @@ class _Forwarder:
             gid = getattr(m, "grouped_id", None)
             if gid:
                 if pending and getattr(pending[0], "grouped_id", None) != gid:
-                    await flush()
+                    ok = await forward_one(pending)
+                    pending = []
+                    if not ok:
+                        break
                 pending.append(m)
                 if len(pending) >= 10:
-                    await flush()
+                    ok = await forward_one(pending)
+                    pending = []
+                    if not ok:
+                        break
                 continue
-            await flush()
-            pending = [m]
-            await flush()
-        await flush()
-        print(f"[link-forwarder] DONE {title}: {sent} messages", flush=True)
+            if pending:
+                ok = await forward_one(pending)
+                pending = []
+                if not ok:
+                    break
+            ok = await forward_one([m])
+            if not ok:
+                break
+        if ok and pending:
+            ok = await forward_one(pending)
+        print(f"[link-forwarder] DONE {title}: {sent} messages ok={ok}", flush=True)
 
 
 def submit_link(text):
